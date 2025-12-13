@@ -1,0 +1,73 @@
+version: "2"
+linters:
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - decorder
+    - durationcheck
+    - errname
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - misspell
+    - nakedret
+    - nilerr
+    - noctx
+    - nolintlint
+    - perfsprint
+    - revive
+    - testifylint
+    - usestdlibvars
+    - usetesting
+  disable:
+    - errcheck
+  settings:
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"
+        - "-ST1020"
+        - "-ST1021"
+        - "-ST1022"
+        - "-SA5001"
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - bodyclose
+          - gosec
+          - noctx
+        path: _test\.go
+    paths:
+      - .*.pb.go$
+      - .*/mocks/.*
+      - .*-gen
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+  exclusions:
+    generated: lax
+    paths:
+      - .*.pb.go$
+      - .*/mocks/.*
+      - .*-gen
+run:
+  go: "1.24"
+  timeout: 5m
+  concurrency: 4
+  relative-path-mode: cfg
