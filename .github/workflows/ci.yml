@@ -3,35 +3,16 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
-
-env:
-  GO_VERSION: "1.24"
+    branches:
+      - main
 
 jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build
-        run: go build -v ./...
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,7 +20,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: "1.24"
           cache: true
 
       - name: Run golangci-lint
@@ -49,41 +30,34 @@ jobs:
           args: --config=.golangci.yaml
 
   test:
-    name: Test
+    name: Test (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
-    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.21", "1.22", "1.23", "1.24"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Setup Go ${{ matrix.go-version }}
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Install gocover-cobertura
-        run: go install github.com/boumenot/gocover-cobertura@latest
+      - name: Download dependencies
+        run: go mod download
 
       - name: Run tests with coverage
-        run: |
-          go test -race -v \
-            -coverpkg=$(go list ./... | grep -v -E '/(mocks|cmd)($$|/)' | tr '\n' ',' | sed 's/,$//') \
-            -coverprofile=coverage.out ./...
+        run: make test
 
-      - name: Generate Cobertura coverage report
-        run: gocover-cobertura < coverage.out > coverage.xml
-
-      - name: Display coverage
-        run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
-          echo "Total coverage: ${COVERAGE}"
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage to Codecov
+        if: matrix.go-version == '1.24'
+        uses: codecov/codecov-action@v5
         with:
-          name: coverage-report
-          path: |
-            coverage.out
-            coverage.xml
-          retention-days: 7
+          file: ./cover.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
