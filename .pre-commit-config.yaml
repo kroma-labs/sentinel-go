@@ -23,12 +23,3 @@ repos:
     rev: v8.24.2
     hooks:
       - id: gitleaks
-
-  - repo: local
-    hooks:
-      - id: make-lint
-        name: "Run linter"
-        entry: make lint
-        language: system
-        pass_filenames: false
-        files: \.(go|mod|sum)$
