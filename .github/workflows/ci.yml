@@ -23,6 +23,9 @@ jobs:
           go-version-file: "go.mod"
           cache: true
 
+      - name: Run go vet
+        run: go vet ./...
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
@@ -47,7 +50,7 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        run: go mod tidy -v
 
       - name: Run tests with coverage
         run: make test
