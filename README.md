@@ -64,6 +64,47 @@ func main() {
 }
 ```
 
+## 🚀 Quick Start: SQLX
+
+Use `sentinelsqlx` for `jmoiron/sqlx` with full struct scanning support.
+
+```go
+import (
+    "context"
+    sentinelsqlx "github.com/kroma-labs/sentinel-go/sqlx"
+    _ "github.com/lib/pq"
+)
+
+type User struct {
+    ID   int    `db:"id"`
+    Name string `db:"name"`
+}
+
+func main() {
+    // 1. Open Connection with Sentinel SQLX
+    db, err := sentinelsqlx.Open("postgres", "postgres://...",
+        sentinelsqlx.WithDBSystem("postgresql"),
+        sentinelsqlx.WithDBName("main_db"),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer db.Close()
+
+    // 2. Use sqlx methods - all instrumented!
+    var user User
+    db.GetContext(ctx, &user, "SELECT * FROM users WHERE id = $1", 1)
+
+    var users []User
+    db.SelectContext(ctx, &users, "SELECT * FROM users")
+
+    // 3. Transactions with tracing
+    tx, _ := db.BeginTxx(ctx, nil)
+    tx.ExecContext(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
+    tx.Commit()
+}
+```
+
 ## ⚙️ Configuration Options
 
 Customize behavior using functional options:
@@ -78,11 +119,11 @@ Customize behavior using functional options:
 
 ## 🏗️ Modules
 
-| Module         | Status     | Description                                        |
-| -------------- | ---------- | -------------------------------------------------- |
-| [`sql`](./sql) | ✅ Stable  | Wrapper for `database/sql` with tracing & metrics. |
-| `sqlx`         | 🚧 Planned | Extensions for `jmoiron/sqlx`.                     |
-| `http`         | 🚧 Planned | Instrumented HTTP Client/Server.                   |
+| Module           | Status     | Description                                        |
+| ---------------- | ---------- | -------------------------------------------------- |
+| [`sql`](./sql)   | ✅ Stable  | Wrapper for `database/sql` with tracing & metrics. |
+| [`sqlx`](./sqlx) | ✅ Stable  | Wrapper for `jmoiron/sqlx` with tracing & metrics. |
+| `http`           | 🚧 Planned | Instrumented HTTP Client/Server.                   |
 
 ## 🤝 Contributing
 
