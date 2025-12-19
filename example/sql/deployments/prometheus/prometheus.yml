@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "sentinel-sql-example"
+    static_configs:
+      - targets: ["host.docker.internal:2112"]
+        labels:
+          service: "sentinel-sql-example"
