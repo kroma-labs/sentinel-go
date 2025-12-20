@@ -449,3 +449,161 @@ func TestDB_DriverName(t *testing.T) {
 	got := db.DriverName()
 	assert.Equal(t, "postgres", got)
 }
+
+func TestDB_NamedExecContext(t *testing.T) {
+	type user struct {
+		Name  string `db:"name"`
+		Email string `db:"email"`
+	}
+
+	tests := []struct {
+		name    string
+		query   string
+		args    interface{}
+		mockFn  func(mock sqlmock.Sqlmock)
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name:  "given valid named exec, then executes successfully",
+			query: "INSERT INTO users (name, email) VALUES (:name, :email)",
+			args:  user{Name: "test", Email: "test@example.com"},
+			mockFn: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO users").
+					WithArgs("test", "test@example.com").
+					WillReturnResult(sqlmock.NewResult(1, 1))
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:  "given exec error, then returns error",
+			query: "INSERT INTO users (name, email) VALUES (:name, :email)",
+			args:  user{Name: "test", Email: "test@example.com"},
+			mockFn: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO users").
+					WithArgs("test", "test@example.com").
+					WillReturnError(sql.ErrConnDone)
+			},
+			wantErr: assert.Error,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer mockDB.Close()
+
+			db := NewDB(mockDB, "postgres", WithDBSystem("postgresql"))
+			tt.mockFn(mock)
+
+			result, err := db.NamedExecContext(context.Background(), tt.query, tt.args)
+
+			tt.wantErr(t, err)
+			if err == nil {
+				require.NotNil(t, result)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestDB_NamedQueryContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		arg     interface{}
+		mockFn  func(mock sqlmock.Sqlmock)
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name:  "given valid named query, then returns rows",
+			query: "SELECT * FROM users WHERE name = :name",
+			arg:   map[string]interface{}{"name": "test"},
+			mockFn: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "name", "email"}).
+					AddRow(1, "test", "test@example.com")
+				mock.ExpectQuery("SELECT \\* FROM users WHERE name").
+					WithArgs("test").
+					WillReturnRows(rows)
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:  "given query error, then returns error",
+			query: "SELECT * FROM users WHERE name = :name",
+			arg:   map[string]interface{}{"name": "test"},
+			mockFn: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT \\* FROM users WHERE name").
+					WithArgs("test").
+					WillReturnError(sql.ErrConnDone)
+			},
+			wantErr: assert.Error,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer mockDB.Close()
+
+			db := NewDB(mockDB, "postgres", WithDBSystem("postgresql"))
+			tt.mockFn(mock)
+
+			rows, err := db.NamedQueryContext(context.Background(), tt.query, tt.arg)
+
+			tt.wantErr(t, err)
+			if err == nil {
+				require.NotNil(t, rows)
+				rows.Close()
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestDB_PrepareNamedContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mockFn  func(mock sqlmock.Sqlmock)
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name:  "given valid query, then prepares named statement",
+			query: "INSERT INTO users (name, email) VALUES (:name, :email)",
+			mockFn: func(mock sqlmock.Sqlmock) {
+				mock.ExpectPrepare("INSERT INTO users")
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:  "given prepare error, then returns error",
+			query: "INSERT INTO users (name, email) VALUES (:name, :email)",
+			mockFn: func(mock sqlmock.Sqlmock) {
+				mock.ExpectPrepare("INSERT INTO users").WillReturnError(sql.ErrConnDone)
+			},
+			wantErr: assert.Error,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer mockDB.Close()
+
+			db := NewDB(mockDB, "postgres", WithDBSystem("postgresql"))
+			tt.mockFn(mock)
+
+			stmt, err := db.PrepareNamedContext(context.Background(), tt.query)
+
+			tt.wantErr(t, err)
+			if err == nil {
+				require.NotNil(t, stmt)
+				stmt.Close()
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
