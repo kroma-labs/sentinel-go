@@ -34,15 +34,18 @@
 package httpclient
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -527,6 +530,36 @@ type internalConfig struct {
 	// ProxyFromEnvironment uses HTTP_PROXY, HTTPS_PROXY and NO_PROXY
 	// environment variables. Default: true
 	ProxyFromEnvironment bool
+
+	// === Request Filtering ===
+
+	// Filters determine which requests should be traced.
+	// If any filter returns false, the request is not traced.
+	// If no filters are set, all requests are traced.
+	Filters []Filter
+
+	// === Span Customization ===
+
+	// SpanNameFormatter formats span names from request.
+	// Default: "HTTP {method}"
+	SpanNameFormatter SpanNameFormatter
+
+	// SpanStartOptions are additional options applied when starting spans.
+	SpanStartOptions []trace.SpanStartOption
+
+	// MetricAttributesFn adds dynamic attributes to metrics based on request.
+	MetricAttributesFn func(*http.Request) []attribute.KeyValue
+
+	// === Context Propagation ===
+
+	// Propagators configures the context propagators.
+	// Default: TraceContext + Baggage (W3C standard)
+	Propagators propagation.TextMapPropagator
+
+	// ClientTrace provides a custom httptrace.ClientTrace factory.
+	// This can be used to completely customize or replace network tracing.
+	// If nil, the default network tracing is used when EnableNetworkTrace is true.
+	ClientTrace func(context.Context) *httptrace.ClientTrace
 }
 
 // newConfig creates a new internal config with defaults and applies options.
@@ -605,6 +638,29 @@ func (cfg *internalConfig) baseAttributes() []attribute.KeyValue {
 // =============================================================================
 // Options - Functional Options for Client Configuration
 // =============================================================================
+
+// Filter determines whether a request should be traced.
+// Return true to trace the request, false to skip tracing.
+// All filters must return true for a request to be traced.
+//
+// Common use cases:
+//   - Skip health check endpoints: return !strings.HasPrefix(r.URL.Path, "/health")
+//   - Skip static assets: return !strings.HasPrefix(r.URL.Path, "/static/")
+//   - Skip internal endpoints: return r.URL.Host != "localhost"
+type Filter func(r *http.Request) bool
+
+// SpanNameFormatter formats span names based on the HTTP request.
+// The method parameter is the HTTP method (GET, POST, etc.).
+// Return the desired span name.
+//
+// Default behavior produces: "HTTP {method}" (e.g., "HTTP GET")
+//
+// Example custom formatter:
+//
+//	func(method string, r *http.Request) string {
+//	    return method + " " + r.URL.Path
+//	}
+type SpanNameFormatter func(method string, r *http.Request) string
 
 // Option configures the HTTP client.
 type Option func(*internalConfig)
@@ -786,5 +842,142 @@ func WithProxyFromEnvironment(enabled bool) Option {
 func WithDisableNetworkTrace() Option {
 	return func(cfg *internalConfig) {
 		cfg.EnableNetworkTrace = false
+	}
+}
+
+// WithFilter adds a filter to determine which requests should be traced.
+// Filters are called for each request before tracing starts.
+// If any filter returns false, the request is not traced.
+// Multiple filters can be added by calling WithFilter multiple times.
+//
+// Use filters to skip tracing for:
+//   - Health check endpoints
+//   - Metrics endpoints
+//   - Static assets
+//   - Internal/debug endpoints
+//
+// Example - Skip health checks:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithFilter(func(r *http.Request) bool {
+//	        return !strings.HasPrefix(r.URL.Path, "/health")
+//	    }),
+//	    sentinelhttpclient.WithServiceName("my-service"),
+//	)
+//
+// Example - Skip multiple endpoints:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithFilter(func(r *http.Request) bool {
+//	        return !strings.HasPrefix(r.URL.Path, "/health")
+//	    }),
+//	    sentinelhttpclient.WithFilter(func(r *http.Request) bool {
+//	        return !strings.HasPrefix(r.URL.Path, "/metrics")
+//	    }),
+//	)
+func WithFilter(f Filter) Option {
+	return func(cfg *internalConfig) {
+		cfg.Filters = append(cfg.Filters, f)
+	}
+}
+
+// WithSpanNameFormatter sets a custom function to generate span names.
+// The default formatter produces "HTTP {method}" (e.g., "HTTP GET").
+//
+// Common patterns:
+//   - Include path: func(m string, r *http.Request) string { return m + " " + r.URL.Path }
+//   - Fixed operation: func(m string, r *http.Request) string { return "api-call" }
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithSpanNameFormatter(func(method string, r *http.Request) string {
+//	        return method + " " + r.URL.Path
+//	    }),
+//	)
+func WithSpanNameFormatter(f SpanNameFormatter) Option {
+	return func(cfg *internalConfig) {
+		cfg.SpanNameFormatter = f
+	}
+}
+
+// WithSpanOptions adds trace.SpanStartOption to each new span.
+// Use this to set custom attributes, links, or span kinds.
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithSpanOptions(
+//	        trace.WithAttributes(attribute.String("team", "platform")),
+//	    ),
+//	)
+func WithSpanOptions(opts ...trace.SpanStartOption) Option {
+	return func(cfg *internalConfig) {
+		cfg.SpanStartOptions = append(cfg.SpanStartOptions, opts...)
+	}
+}
+
+// WithMetricAttributesFn sets a function to add dynamic attributes to metrics.
+// The function is called for each request and the returned attributes
+// are added to all metrics recorded for that request.
+//
+// Use this to add custom dimensions for filtering/grouping metrics.
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
+//	        return []attribute.KeyValue{
+//	            attribute.String("tenant", r.Header.Get("X-Tenant-ID")),
+//	        }
+//	    }),
+//	)
+func WithMetricAttributesFn(f func(*http.Request) []attribute.KeyValue) Option {
+	return func(cfg *internalConfig) {
+		cfg.MetricAttributesFn = f
+	}
+}
+
+// WithPropagators sets custom context propagators for trace context injection.
+// By default, W3C TraceContext and Baggage propagators are used.
+//
+// Use this when you need to:
+//   - Use different propagation formats (e.g., B3, Jaeger)
+//   - Customize which headers are used for trace context
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithPropagators(b3.New()),
+//	)
+func WithPropagators(p propagation.TextMapPropagator) Option {
+	return func(cfg *internalConfig) {
+		cfg.Propagators = p
+	}
+}
+
+// WithClientTrace sets a custom httptrace.ClientTrace factory.
+// This completely replaces the built-in network tracing when provided.
+//
+// Use this when you need full control over HTTP client event tracing,
+// or to integrate with custom tracing systems.
+//
+// Note: When set, EnableNetworkTrace is effectively ignored for the
+// custom trace - you control all tracing behavior.
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithClientTrace(func(ctx context.Context) *httptrace.ClientTrace {
+//	        return &httptrace.ClientTrace{
+//	            DNSStart: func(info httptrace.DNSStartInfo) {
+//	                log.Printf("DNS lookup: %s", info.Host)
+//	            },
+//	        }
+//	    }),
+//	)
+func WithClientTrace(f func(context.Context) *httptrace.ClientTrace) Option {
+	return func(cfg *internalConfig) {
+		cfg.ClientTrace = f
 	}
 }

@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -125,7 +126,11 @@ func TestNew_RequestExecution(t *testing.T) {
 
 			resp, err := client.Do(req)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+
+			// Must consume and close body before checking spans
+			// (span ends when body is closed, not immediately after RoundTrip)
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
 
 			assert.Equal(t, tt.wantStatusCode, resp.StatusCode)
 

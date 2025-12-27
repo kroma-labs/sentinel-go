@@ -25,30 +25,54 @@ type otelTransport struct {
 
 // newOtelTransport creates a new instrumented transport.
 func newOtelTransport(base http.RoundTripper, cfg *internalConfig) *otelTransport {
-	return &otelTransport{
-		base: base,
-		cfg:  cfg,
-		propagator: propagation.NewCompositeTextMapPropagator(
+	// Use custom propagators if configured, otherwise default to W3C TraceContext + Baggage
+	propagator := cfg.Propagators
+	if propagator == nil {
+		propagator = propagation.NewCompositeTextMapPropagator(
 			propagation.TraceContext{},
 			propagation.Baggage{},
-		),
+		)
+	}
+
+	return &otelTransport{
+		base:       base,
+		cfg:        cfg,
+		propagator: propagator,
 	}
 }
 
 // RoundTrip implements http.RoundTripper with full tracing and metrics.
 func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Check filters - skip tracing if any filter returns false
+	for _, f := range t.cfg.Filters {
+		if !f(req) {
+			return t.base.RoundTrip(req)
+		}
+	}
+
 	start := time.Now()
 	ctx := req.Context()
 
-	// Build span name: "HTTP {method}"
-	spanName := "HTTP " + req.Method
+	// Build span name using formatter or default
+	var spanName string
+	if t.cfg.SpanNameFormatter != nil {
+		spanName = t.cfg.SpanNameFormatter(req.Method, req)
+	} else {
+		spanName = "HTTP " + req.Method
+	}
 
-	// Create span with client kind
-	ctx, span := t.cfg.Tracer.Start(ctx, spanName,
+	// Build span options
+	spanOpts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(t.requestAttributes(req)...),
-	)
-	defer span.End()
+	}
+	spanOpts = append(spanOpts, t.cfg.SpanStartOptions...)
+
+	// Create span
+	ctx, span := t.cfg.Tracer.Start(ctx, spanName, spanOpts...)
+	// Note: span.End() is NOT deferred here - it will be called when:
+	// 1. Transport error occurs (immediately)
+	// 2. Response body is closed or EOF is reached (via wrappedBody)
 
 	// Inject trace context into request headers
 	t.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
@@ -63,9 +87,13 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.cfg.Metrics.recordRequestBodySize(ctx, req.ContentLength, baseAttrs)
 	}
 
-	// Setup network tracing if enabled
+	// Setup network tracing
 	var nt *networkTrace
-	if t.cfg.EnableNetworkTrace {
+	if t.cfg.ClientTrace != nil {
+		// Use custom client trace factory
+		ctx = httptrace.WithClientTrace(ctx, t.cfg.ClientTrace(ctx))
+	} else if t.cfg.EnableNetworkTrace {
+		// Use built-in network tracing
 		nt = &networkTrace{}
 		clientTrace := createClientTrace(nt)
 		ctx = httptrace.WithClientTrace(ctx, clientTrace)
@@ -86,12 +114,13 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		nt.recordTimingMetrics(ctx, t.cfg.Metrics, baseAttrs)
 	}
 
-	// Handle errors
+	// Handle errors - end span immediately on transport failure
 	if err != nil {
 		errorType := classifyError(err)
 		setSpanError(span, err, errorType)
 		t.cfg.Metrics.recordError(ctx, errorType, baseAttrs)
 		t.cfg.Metrics.recordRequestDuration(ctx, duration, t.errorAttributes(req, errorType))
+		span.End() // End span immediately on error
 		return nil, err
 	}
 
@@ -112,6 +141,20 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Record request duration with response attributes
 	t.cfg.Metrics.recordRequestDuration(ctx, duration, t.metricsAttributes(req, resp))
+
+	// Wrap response body to end span on close/EOF
+	// This ensures span duration includes body consumption time for streaming
+	if resp.Body != nil {
+		resp.Body = newWrappedBody(span, resp.Body, func(bytesRead int64) {
+			// Record actual response body size if it differs from Content-Length
+			if resp.ContentLength <= 0 && bytesRead > 0 {
+				t.cfg.Metrics.recordResponseBodySize(ctx, bytesRead, baseAttrs)
+			}
+		})
+	} else {
+		// No body to read, end span immediately
+		span.End()
+	}
 
 	return resp, nil
 }

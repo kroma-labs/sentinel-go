@@ -103,7 +103,10 @@ func TestOtelTransport_RoundTrip(t *testing.T) {
 
 			tt.wantErr(t, err)
 			if err == nil {
-				defer resp.Body.Close()
+				// Must consume and close body before checking spans
+				// (span ends when body is closed, not immediately)
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
 			}
 
 			spans := exporter.GetSpans()
