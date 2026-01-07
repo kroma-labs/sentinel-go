@@ -1,16 +1,3 @@
-// Package sql provides an instrumented database/sql driver wrapper
-// with automatic OpenTelemetry tracing and metrics.
-//
-// Usage:
-//
-//	import sentinelsql "github.com/kroma-labs/sentinel-go/sql"
-//
-//	db, err := sentinelsql.Open("postgres", dsn,
-//	    sentinelsql.WithDBSystem("postgresql"),
-//	    sentinelsql.WithDBName("myapp"),
-//	)
-//	// db is *sql.DB - fully compatible with stdlib
-//	rows, _ := db.QueryContext(ctx, "SELECT * FROM users")
 package sql
 
 import (

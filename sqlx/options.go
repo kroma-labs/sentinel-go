@@ -1,25 +1,3 @@
-// Package sqlx provides an instrumented sqlx wrapper
-// with automatic OpenTelemetry tracing and metrics.
-//
-// This package wraps github.com/jmoiron/sqlx to provide automatic
-// instrumentation for sqlx-specific methods like Get, Select, NamedExec,
-// and NamedQuery, in addition to the standard database/sql operations.
-//
-// Usage:
-//
-//	import sentinelsqlx "github.com/kroma-labs/sentinel-go/sqlx"
-//
-//	db, err := sentinelsqlx.Open("postgres", dsn,
-//	    sentinelsqlx.WithDBSystem("postgresql"),
-//	    sentinelsqlx.WithDBName("myapp"),
-//	)
-//	// db is *sentinelsqlx.DB - wraps *sqlx.DB with instrumentation
-//
-//	var user User
-//	err = db.GetContext(ctx, &user, "SELECT * FROM users WHERE id = $1", 1)
-//
-//	var users []User
-//	err = db.SelectContext(ctx, &users, "SELECT * FROM users")
 package sqlx
 
 import (
