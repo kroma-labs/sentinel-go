@@ -1,4 +1,3 @@
-// Package httpclient provides body wrapping utilities for response body tracking.
 package httpclient
 
 import (
