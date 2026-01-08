@@ -2,13 +2,20 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
+	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -386,4 +393,90 @@ func TestBaseAttributes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithRetryConfig(t *testing.T) {
+	retryCfg := AggressiveRetryConfig()
+	cfg := newConfig(WithRetryConfig(retryCfg))
+	assert.Equal(t, retryCfg, cfg.RetryConfig)
+}
+
+func TestWithRetryDisabled(t *testing.T) {
+	cfg := newConfig(WithRetryDisabled())
+	assert.False(t, cfg.RetryConfig.IsEnabled())
+}
+
+func TestWithRetryClassifier(t *testing.T) {
+	classifier := func(_ *http.Response, _ error) bool { return true }
+	cfg := newConfig(WithRetryClassifier(classifier))
+	require.NotNil(t, cfg.RetryClassifier)
+	assert.True(t, cfg.RetryClassifier(nil, nil))
+}
+
+func TestWithRetryBackOff(t *testing.T) {
+	b := backoff.NewConstantBackOff(1 * time.Second)
+	cfg := newConfig(WithRetryBackOff(b))
+	assert.Equal(t, b, cfg.RetryBackOff)
+}
+
+func TestWithTieredRetry(t *testing.T) {
+	tiers := []RetryTier{{MaxRetries: 1, Delay: time.Minute}}
+	cfg := newConfig(WithTieredRetry(tiers, 5*time.Minute))
+	require.IsType(t, &TieredRetryBackOff{}, cfg.RetryBackOff)
+}
+
+func TestWithTieredRetry_Default(t *testing.T) {
+	cfg := newConfig(WithTieredRetry(nil, 5*time.Minute))
+	require.IsType(t, &TieredRetryBackOff{}, cfg.RetryBackOff)
+	tb := cfg.RetryBackOff.(*TieredRetryBackOff)
+	assert.Len(t, tb.Tiers, 2)
+}
+
+func TestWithFilter(t *testing.T) {
+	filter := func(_ *http.Request) bool { return false }
+	cfg := newConfig(WithFilter(filter))
+	require.Len(t, cfg.Filters, 1)
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	assert.False(t, cfg.Filters[0](req))
+}
+
+func TestWithSpanNameFormatter(t *testing.T) {
+	formatter := func(_ string, _ *http.Request) string { return "custom-span" }
+	cfg := newConfig(WithSpanNameFormatter(formatter))
+	require.NotNil(t, cfg.SpanNameFormatter)
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	assert.Equal(t, "custom-span", cfg.SpanNameFormatter("GET", req))
+}
+
+func TestWithSpanOptions(t *testing.T) {
+	opts := trace.WithAttributes(attribute.String("key", "value"))
+	cfg := newConfig(WithSpanOptions(opts))
+	assert.Len(t, cfg.SpanStartOptions, 1)
+}
+
+func TestWithMetricAttributesFn(t *testing.T) {
+	fn := func(_ *http.Request) []attribute.KeyValue {
+		return []attribute.KeyValue{attribute.String("custom", "val")}
+	}
+	cfg := newConfig(WithMetricAttributesFn(fn))
+	assert.NotNil(t, cfg.MetricAttributesFn)
+}
+
+func TestWithPropagators(t *testing.T) {
+	prop := propagation.NewCompositeTextMapPropagator()
+	cfg := newConfig(WithPropagators(prop))
+	assert.Equal(t, prop, cfg.Propagators)
+}
+
+func TestWithTLSConfig(t *testing.T) {
+	tlsConfig := &tls.Config{InsecureSkipVerify: true}
+	cfg := newConfig(WithTLSConfig(tlsConfig))
+	assert.Equal(t, tlsConfig, cfg.TLSConfig)
+}
+
+func TestWithProxyURL(t *testing.T) {
+	proxyURL, _ := url.Parse("http://proxy.example.com:8080")
+	cfg := newConfig(WithProxyURL(proxyURL))
+	assert.NotNil(t, cfg)
+	assert.Equal(t, proxyURL, cfg.ProxyURL)
 }

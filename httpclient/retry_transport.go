@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -11,6 +12,9 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// errRetryableStatus is a sentinel error for retryable HTTP status codes.
+var errRetryableStatus = errors.New("retryable status code")
 
 // retryTransport wraps an http.RoundTripper with retry logic.
 // It uses the provided backoff strategy and classifier to determine
@@ -100,6 +104,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if resp != nil && resp.Body != nil {
 				io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
+			}
+			// If err is nil (retryable status code), create a synthetic error
+			// so backoff.Retry knows to retry
+			if err == nil && resp != nil {
+				err = errRetryableStatus
 			}
 			return nil, err
 		}

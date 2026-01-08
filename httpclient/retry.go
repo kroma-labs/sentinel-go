@@ -188,7 +188,7 @@ func NoRetryConfig() RetryConfig {
 		MaxInterval:     0,
 		MaxElapsedTime:  0,
 		Multiplier:      0,
-		JitterFactor:    0,
+		JitterFactor:    -1, // Sentinel to distinguish from uninitialized config
 	}
 }
 

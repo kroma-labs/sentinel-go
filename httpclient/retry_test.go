@@ -48,7 +48,7 @@ func TestNoRetryConfig(t *testing.T) {
 	assert.Equal(t, time.Duration(0), cfg.MaxInterval)
 	assert.Equal(t, time.Duration(0), cfg.MaxElapsedTime)
 	assert.InDelta(t, 0.0, cfg.Multiplier, 0.001)
-	assert.InDelta(t, 0.0, cfg.JitterFactor, 0.001)
+	assert.InDelta(t, -1.0, cfg.JitterFactor, 0.001) // Sentinel value
 }
 
 func TestRetryConfig_IsEnabled(t *testing.T) {

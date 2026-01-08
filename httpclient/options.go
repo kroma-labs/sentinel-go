@@ -567,8 +567,13 @@ func newConfig(opts ...Option) *internalConfig {
 	// Initialize metrics (ignore errors, will just be nil if fails)
 	cfg.Metrics, _ = newMetrics(cfg.Meter)
 
-	// Initialize retry defaults if not set
-	if cfg.RetryConfig.MaxRetries == 0 && cfg.RetryConfig.InitialInterval == 0 {
+	// Initialize retry defaults if not explicitly configured.
+	// We check if RetryConfig is still the zero value (not configured).
+	// Note: NoRetryConfig explicitly sets MaxRetries=0, which we detect
+	// by checking if Multiplier is also 0 (NoRetryConfig sets it to 0,
+	// while a real config would have a positive multiplier).
+	zeroConfig := RetryConfig{}
+	if cfg.RetryConfig == zeroConfig {
 		cfg.RetryConfig = DefaultRetryConfig()
 	}
 	if cfg.RetryClassifier == nil {

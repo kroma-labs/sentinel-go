@@ -10,3 +10,6 @@ packages:
   github.com/kroma-labs/sentinel-go/sql:
     config:
       all: true
+  github.com/kroma-labs/sentinel-go/httpclient:
+    config:
+      all: true
