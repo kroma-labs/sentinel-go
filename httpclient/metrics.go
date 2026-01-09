@@ -53,6 +53,20 @@ type metrics struct {
 
 	// requestErrors counts request errors by error type.
 	requestErrors metric.Int64Counter
+
+	// === Retry Metrics ===
+
+	// retryAttempts counts retry attempts.
+	// Incremented each time a request is retried.
+	retryAttempts metric.Int64Counter
+
+	// retryExhausted counts requests that exhausted all retries.
+	// A high value indicates downstream service issues.
+	retryExhausted metric.Int64Counter
+
+	// retryDuration measures total time spent in retry loop.
+	// Includes all attempts and wait times.
+	retryDuration metric.Float64Histogram
 }
 
 // newMetrics creates and registers metric instruments.
@@ -189,6 +203,39 @@ func newMetrics(meter metric.Meter) (*metrics, error) {
 		"http.client.request.error",
 		metric.WithDescription("Number of HTTP client request errors"),
 		metric.WithUnit("{error}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Retry attempts counter
+	m.retryAttempts, err = meter.Int64Counter(
+		"http.client.retry.attempts",
+		metric.WithDescription("Number of HTTP client retry attempts"),
+		metric.WithUnit("{attempt}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Retry exhausted counter
+	m.retryExhausted, err = meter.Int64Counter(
+		"http.client.retry.exhausted",
+		metric.WithDescription("Number of requests that exhausted all retries"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Retry duration histogram
+	m.retryDuration, err = meter.Float64Histogram(
+		"http.client.retry.duration",
+		metric.WithDescription("Total time spent in retry loop in seconds"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(
+			0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120,
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -340,4 +387,35 @@ func (m *metrics) recordError(ctx context.Context, errorType string, attrs []att
 	allAttrs = append(allAttrs, attrs...)
 	allAttrs = append(allAttrs, attribute.String("error.type", errorType))
 	m.requestErrors.Add(ctx, 1, metric.WithAttributes(allAttrs...))
+}
+
+// recordRetryAttempt records a retry attempt.
+func (m *metrics) recordRetryAttempt(ctx context.Context, attrs []attribute.KeyValue, attempt int) {
+	if m == nil || m.retryAttempts == nil {
+		return
+	}
+	allAttrs := make([]attribute.KeyValue, 0, len(attrs)+1)
+	allAttrs = append(allAttrs, attrs...)
+	allAttrs = append(allAttrs, attribute.Int("retry.attempt", attempt))
+	m.retryAttempts.Add(ctx, 1, metric.WithAttributes(allAttrs...))
+}
+
+// recordRetryExhausted records when all retries have been exhausted.
+func (m *metrics) recordRetryExhausted(ctx context.Context, attrs []attribute.KeyValue) {
+	if m == nil || m.retryExhausted == nil {
+		return
+	}
+	m.retryExhausted.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
+
+// recordRetryDuration records the total time spent in a retry loop.
+func (m *metrics) recordRetryDuration(
+	ctx context.Context,
+	attrs []attribute.KeyValue,
+	duration time.Duration,
+) {
+	if m == nil || m.retryDuration == nil {
+		return
+	}
+	m.retryDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }

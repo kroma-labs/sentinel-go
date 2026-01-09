@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"net/http/httptrace"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -252,23 +254,18 @@ func classifyError(err error) string {
 		return ErrorTypeTLSError
 	}
 
-	// Check for connection refused (from syscall errors)
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		errStr := strings.ToLower(opErr.Error())
-		if strings.Contains(errStr, "connection refused") {
-			return ErrorTypeConnectionRefused
-		}
-		if strings.Contains(errStr, "connection reset") {
-			return ErrorTypeConnectionReset
-		}
-		// TLS errors often appear as OpErrors
-		if strings.Contains(errStr, "tls") || strings.Contains(errStr, "certificate") {
-			return ErrorTypeTLSError
-		}
+	// Check for syscall-level errors
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return ErrorTypeConnectionRefused
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return ErrorTypeConnectionReset
+	}
+	if errors.Is(err, io.EOF) {
+		return ErrorTypeEOF
 	}
 
-	// Check error message for common patterns
+	// Fallback: check error message for common patterns (for wrapped errors and edge cases)
 	errStr := strings.ToLower(err.Error())
 
 	if strings.Contains(errStr, "timeout") {

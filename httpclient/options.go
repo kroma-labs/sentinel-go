@@ -1,36 +1,3 @@
-// Package httpclient provides an instrumented HTTP client wrapper
-// with automatic OpenTelemetry tracing and metrics.
-//
-// # Quick Start
-//
-// Use the default configuration for most use cases:
-//
-//	client := sentinelhttpclient.New(
-//	    sentinelhttpclient.WithServiceName("my-service"),
-//	)
-//	resp, err := client.Do(req)
-//
-// # Custom Configuration
-//
-// For fine-tuned HTTP transport settings, use WithConfig:
-//
-//	cfg := sentinelhttpclient.DefaultConfig()
-//	cfg.Timeout = 10 * time.Second
-//	cfg.MaxIdleConnsPerHost = 50
-//
-//	client := sentinelhttpclient.New(
-//	    sentinelhttpclient.WithConfig(cfg),
-//	    sentinelhttpclient.WithServiceName("my-service"),
-//	)
-//
-// # Pre-defined Configurations
-//
-// The package provides pre-defined configurations for common use cases:
-//
-//   - DefaultConfig: Balanced settings for general-purpose use
-//   - HighThroughputConfig: Optimized for high-concurrency scenarios
-//   - LowLatencyConfig: Optimized for latency-sensitive applications
-//   - ConservativeConfig: Resource-conscious settings for constrained environments
 package httpclient
 
 import (
@@ -42,6 +9,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -560,6 +528,20 @@ type internalConfig struct {
 	// This can be used to completely customize or replace network tracing.
 	// If nil, the default network tracing is used when EnableNetworkTrace is true.
 	ClientTrace func(context.Context) *httptrace.ClientTrace
+
+	// === Retry Configuration ===
+
+	// RetryConfig holds retry behavior configuration.
+	// Default: DefaultRetryConfig() (3 retries, exponential backoff)
+	RetryConfig RetryConfig
+
+	// RetryClassifier determines which errors/responses should trigger retries.
+	// Default: DefaultClassifier
+	RetryClassifier RetryClassifier
+
+	// RetryBackOff allows providing a custom backoff strategy.
+	// If nil, uses ExponentialBackOff based on RetryConfig.
+	RetryBackOff backoff.BackOff
 }
 
 // newConfig creates a new internal config with defaults and applies options.
@@ -584,6 +566,19 @@ func newConfig(opts ...Option) *internalConfig {
 
 	// Initialize metrics (ignore errors, will just be nil if fails)
 	cfg.Metrics, _ = newMetrics(cfg.Meter)
+
+	// Initialize retry defaults if not explicitly configured.
+	// We check if RetryConfig is still the zero value (not configured).
+	// Note: NoRetryConfig explicitly sets MaxRetries=0, which we detect
+	// by checking if Multiplier is also 0 (NoRetryConfig sets it to 0,
+	// while a real config would have a positive multiplier).
+	zeroConfig := RetryConfig{}
+	if cfg.RetryConfig == zeroConfig {
+		cfg.RetryConfig = DefaultRetryConfig()
+	}
+	if cfg.RetryClassifier == nil {
+		cfg.RetryClassifier = DefaultClassifier
+	}
 
 	return cfg
 }
@@ -979,5 +974,137 @@ func WithPropagators(p propagation.TextMapPropagator) Option {
 func WithClientTrace(f func(context.Context) *httptrace.ClientTrace) Option {
 	return func(cfg *internalConfig) {
 		cfg.ClientTrace = f
+	}
+}
+
+// =============================================================================
+// Retry Options
+// =============================================================================
+
+// WithRetryConfig sets the retry behavior configuration.
+// Use DefaultRetryConfig(), AggressiveRetryConfig(), or ConservativeRetryConfig()
+// as a starting point, then customize as needed.
+//
+// Example - Using a preset:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryConfig(sentinelhttpclient.AggressiveRetryConfig()),
+//	)
+//
+// Example - Custom configuration:
+//
+//	cfg := sentinelhttpclient.DefaultRetryConfig()
+//	cfg.MaxRetries = 5
+//	cfg.InitialInterval = 200 * time.Millisecond
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryConfig(cfg),
+//	)
+func WithRetryConfig(c RetryConfig) Option {
+	return func(cfg *internalConfig) {
+		cfg.RetryConfig = c
+	}
+}
+
+// WithRetryDisabled disables automatic retries.
+// Use this when:
+//   - The operation is not idempotent
+//   - You want to handle retries at a higher level
+//   - Testing without retry interference
+//
+// Example:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryDisabled(),
+//	)
+func WithRetryDisabled() Option {
+	return func(cfg *internalConfig) {
+		cfg.RetryConfig = NoRetryConfig()
+	}
+}
+
+// WithRetryClassifier sets a custom function to determine if a request should be retried.
+// The default classifier (DefaultClassifier) retries on:
+//   - Network errors (timeout, connection refused, DNS errors)
+//   - 429 Too Many Requests
+//   - 502, 503, 504 Gateway errors
+//
+// Example - Custom classifier that retries all 5xx errors:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryClassifier(func(resp *http.Response, err error) bool {
+//	        if resp != nil && resp.StatusCode >= 500 {
+//	            return true
+//	        }
+//	        return sentinelhttpclient.DefaultClassifier(resp, err)
+//	    }),
+//	)
+func WithRetryClassifier(c RetryClassifier) Option {
+	return func(cfg *internalConfig) {
+		cfg.RetryClassifier = c
+	}
+}
+
+// WithRetryBackOff sets a custom backoff strategy.
+// Use this for non-exponential backoff patterns like linear or constant.
+//
+// Available strategies:
+//   - NewLinearBackOff() - Linear growth with jitter
+//   - NewDecorrelatedJitterBackOff() - AWS-style decorrelated jitter
+//   - NewConstantBackOffWithJitter() - Fixed interval with jitter
+//
+// Example - Linear backoff:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryBackOff(sentinelhttpclient.NewLinearBackOff()),
+//	)
+//
+// Example - AWS-style decorrelated jitter:
+//
+//	backoff := sentinelhttpclient.NewDecorrelatedJitterBackOff()
+//	backoff.Base = 200 * time.Millisecond
+//	backoff.Cap = 10 * time.Second
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryBackOff(backoff),
+//	)
+func WithRetryBackOff(b backoff.BackOff) Option {
+	return func(cfg *internalConfig) {
+		cfg.RetryBackOff = b
+	}
+}
+
+// WithTieredRetry configures tiered retry with fixed-delay tiers followed by
+// exponential backoff. This is useful for long-running retry scenarios.
+//
+// The tiered approach provides:
+//   - Predictable delays in early tiers for quick recovery
+//   - Gradually increasing delays for persistent failures
+//   - Exponential backoff as a final fallback
+//
+// Example - Default tiers (5×1min + 5×2min + exponential up to 10min):
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithTieredRetry(nil, 10*time.Minute),
+//	)
+//
+// Example - Custom tiers:
+//
+//	tiers := []sentinelhttpclient.RetryTier{
+//	    {MaxRetries: 3, Delay: 30 * time.Second},
+//	    {MaxRetries: 5, Delay: 1 * time.Minute},
+//	    {MaxRetries: 5, Delay: 5 * time.Minute},
+//	}
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithTieredRetry(tiers, 15*time.Minute),
+//	)
+func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
+	return func(cfg *internalConfig) {
+		if len(tiers) == 0 {
+			// Use default tiers
+			cfg.RetryBackOff = DefaultTieredRetryBackOff()
+		} else {
+			cfg.RetryBackOff = NewTieredRetryBackOff(tiers, maxDelay, DefaultJitterFactor)
+		}
 	}
 }

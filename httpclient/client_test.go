@@ -63,8 +63,11 @@ func TestNew(t *testing.T) {
 			assert.NotNil(t, client.Transport)
 			assert.Equal(t, tt.wantTimeout, client.Timeout)
 
-			_, ok := client.Transport.(*otelTransport)
-			assert.True(t, ok)
+			// Transport can be either retryTransport (wrapping otelTransport) or
+			// otelTransport directly (if retries disabled)
+			_, isRetry := client.Transport.(*retryTransport)
+			_, isOtel := client.Transport.(*otelTransport)
+			assert.True(t, isRetry || isOtel, "expected retryTransport or otelTransport")
 		})
 	}
 }

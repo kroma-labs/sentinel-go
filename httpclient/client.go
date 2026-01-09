@@ -30,12 +30,23 @@ import (
 //	    sentinelhttpclient.WithConfig(cfg),
 //	    sentinelhttpclient.WithServiceName("my-service"),
 //	)
+//
+// Example - With retry configuration:
+//
+//	client := sentinelhttpclient.New(
+//	    sentinelhttpclient.WithRetryConfig(sentinelhttpclient.AggressiveRetryConfig()),
+//	    sentinelhttpclient.WithServiceName("my-service"),
+//	)
 func New(opts ...Option) *http.Client {
 	cfg := newConfig(opts...)
 	transport := cfg.buildTransport()
 
+	// Build transport chain: base -> otel tracing -> retry
+	instrumented := newOtelTransport(transport, cfg)
+	withRetry := newRetryTransport(instrumented, cfg)
+
 	return &http.Client{
-		Transport: newOtelTransport(transport, cfg),
+		Transport: withRetry,
 		Timeout:   cfg.httpConfig.Timeout,
 	}
 }
