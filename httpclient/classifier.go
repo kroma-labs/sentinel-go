@@ -2,10 +2,14 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
 )
 
 // RetryClassifier determines if a request should be retried.
@@ -73,14 +77,14 @@ func DefaultClassifier(resp *http.Response, err error) bool {
 			return false
 		}
 
+		// Check for permanent errors that should not be retried (TLS, DNS NXDOMAIN, etc.)
+		if isPermanentError(err) {
+			return false
+		}
+
 		// Check for retryable network errors
 		if isRetryableNetworkError(err) {
 			return true
-		}
-
-		// Check for permanent errors that should not be retried
-		if isPermanentError(err) {
-			return false
 		}
 
 		// Unknown error - default to retry for network-level errors
@@ -119,7 +123,7 @@ func isRetryableNetworkError(err error) bool {
 		return false
 	}
 
-	// Check for timeout errors
+	// 1. Check net.Error interface (Timeout + Temporary)
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		if netErr.Timeout() {
@@ -127,35 +131,57 @@ func isRetryableNetworkError(err error) bool {
 		}
 	}
 
-	// Check for DNS errors (temporary resolution failures)
+	// 2. Check net.DNSError
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return dnsErr.Temporary()
+		// Only retry if DNS error is explicitly temporary or timeout
+		if dnsErr.IsTemporary || dnsErr.IsTimeout {
+			return true
+		}
+		// All other DNS errors (including IsNotFound) are permanent
+		return false
 	}
 
-	// Check for common transient error patterns in error messages
+	// 3. Check syscall retryable errors
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+
+	// 4. Check for deadline exceeded and EOF
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) {
+		return true
+	}
+
+	// 5. Fallback for edge cases (wrapped errors from third-party libraries)
+	return containsTransientPattern(err)
+}
+
+// containsTransientPattern is a fallback for edge cases where type checks fail.
+func containsTransientPattern(err error) bool {
 	errStr := strings.ToLower(err.Error())
-	transientPatterns := []string{
+	patterns := []string{
 		"connection refused",
 		"connection reset",
-		"no such host",    // DNS failure
-		"network is down", // Network unavailable
+		"no such host",
+		"network is down",
 		"network unreachable",
 		"i/o timeout",
-		"operation timed out",
 		"temporary failure",
 		"server closed",
 		"broken pipe",
-		"connection closed",
 		"eof",
 	}
-
-	for _, pattern := range transientPatterns {
-		if strings.Contains(errStr, pattern) {
+	for _, p := range patterns {
+		if strings.Contains(errStr, p) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -166,22 +192,44 @@ func isPermanentError(err error) bool {
 		return false
 	}
 
-	errStr := strings.ToLower(err.Error())
-	permanentPatterns := []string{
-		"certificate",       // TLS certificate errors
-		"x509",              // Certificate validation errors
-		"tls:",              // TLS handshake errors (permanent misconfig)
-		"no route to host",  // Network configuration error
-		"permission denied", // Access errors
-		"protocol error",    // Protocol-level errors
+	// 1. TLS/Certificate errors
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return true
 	}
 
-	for _, pattern := range permanentPatterns {
-		if strings.Contains(errStr, pattern) {
+	// 2. DNS not found (host doesn't exist - NXDOMAIN)
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return true
+	}
+
+	// 3. Syscall permanent errors
+	if errors.Is(err, syscall.EACCES) || // Permission denied
+		errors.Is(err, syscall.EHOSTDOWN) { // Host is down
+		return true
+	}
+
+	// 4. Fallback for edge cases
+	return containsPermanentPattern(err)
+}
+
+// containsPermanentPattern is a fallback for edge cases where type checks fail.
+func containsPermanentPattern(err error) bool {
+	errStr := strings.ToLower(err.Error())
+	patterns := []string{
+		"x509:",
+		"certificate",
+		"tls:",
+		"protocol error",
+		"no route to host",
+		"permission denied",
+	}
+	for _, p := range patterns {
+		if strings.Contains(errStr, p) {
 			return true
 		}
 	}
-
 	return false
 }
 
