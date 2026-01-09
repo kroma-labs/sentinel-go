@@ -542,6 +542,24 @@ type internalConfig struct {
 	// RetryBackOff allows providing a custom backoff strategy.
 	// If nil, uses ExponentialBackOff based on RetryConfig.
 	RetryBackOff backoff.BackOff
+
+	// === Request Builder Configuration ===
+
+	// BaseURL is the base URL for all requests made via the Request builder.
+	// Example: "https://api.example.com"
+	BaseURL string
+
+	// DefaultHeaders are applied to all requests.
+	DefaultHeaders http.Header
+
+	// Debug enables request/response logging to zerolog.
+	Debug bool
+
+	// GenerateCurl enables cURL command generation for debugging.
+	GenerateCurl bool
+
+	// EnableTrace enables timing trace info collection.
+	EnableTrace bool
 }
 
 // newConfig creates a new internal config with defaults and applies options.
@@ -1106,5 +1124,100 @@ func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
 		} else {
 			cfg.RetryBackOff = NewTieredRetryBackOff(tiers, maxDelay, DefaultJitterFactor)
 		}
+	}
+}
+
+// =============================================================================
+// Request Builder Options
+// =============================================================================
+
+// WithBaseURL sets the base URL for all requests made via the Request builder.
+//
+// The base URL is prepended to all request paths, allowing you to use
+// relative paths in your requests.
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	)
+//	// Requests to "/users" will go to "https://api.example.com/users"
+func WithBaseURL(url string) Option {
+	return func(cfg *internalConfig) {
+		cfg.BaseURL = url
+	}
+}
+
+// WithDefaultHeaders sets headers that are applied to all requests.
+//
+// These headers are merged with per-request headers, with per-request
+// headers taking precedence.
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithDefaultHeaders(http.Header{
+//	        "Accept": []string{"application/json"},
+//	        "X-API-Key": []string{apiKey},
+//	    }),
+//	)
+func WithDefaultHeaders(headers http.Header) Option {
+	return func(cfg *internalConfig) {
+		cfg.DefaultHeaders = headers
+	}
+}
+
+// WithDefaultHeader adds a single default header applied to all requests.
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithDefaultHeader("Accept", "application/json"),
+//	    httpclient.WithDefaultHeader("X-API-Key", apiKey),
+//	)
+func WithDefaultHeader(key, value string) Option {
+	return func(cfg *internalConfig) {
+		if cfg.DefaultHeaders == nil {
+			cfg.DefaultHeaders = make(http.Header)
+		}
+		cfg.DefaultHeaders.Set(key, value)
+	}
+}
+
+// WithDebug enables request/response logging using zerolog.
+//
+// When enabled, the client logs:
+//   - Request method and URL
+//   - Response status and duration
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithDebug(true),
+//	)
+func WithDebug(enabled bool) Option {
+	return func(cfg *internalConfig) {
+		cfg.Debug = enabled
+	}
+}
+
+// WithGenerateCurl enables cURL command generation for debugging.
+//
+// When enabled, each response will have a CurlCommand() method that
+// returns the equivalent cURL command for reproducing the request.
+//
+// Note: This has a small performance overhead, so consider disabling
+// in production.
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithGenerateCurl(true),
+//	)
+//	resp, err := client.Request("Test").Get(ctx, "/users")
+//	fmt.Println(resp.CurlCommand())
+func WithGenerateCurl(enabled bool) Option {
+	return func(cfg *internalConfig) {
+		cfg.GenerateCurl = enabled
 	}
 }

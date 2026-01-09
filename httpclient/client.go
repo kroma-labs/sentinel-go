@@ -4,40 +4,104 @@ import (
 	"net/http"
 )
 
-// New creates an HTTP client with production-ready defaults and OpenTelemetry instrumentation.
+// Client is a high-level HTTP client with fluent request building,
+// OpenTelemetry instrumentation, and retry support.
 //
-// The client uses DefaultConfig() for HTTP transport settings, which provides:
-//   - Connection pooling: 100 max idle, 20 per host
-//   - Timeouts: 15s overall, 5s dial, 10s TLS handshake
-//   - Buffers: 64KB read/write for better throughput
-//   - Keep-alives: enabled for connection reuse
-//   - Compression: enabled (Accept-Encoding: gzip)
-//   - Network tracing: enabled for DNS/TLS/connect visibility
+// Create a Client using New():
+//
+//	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	    httpclient.WithServiceName("payment-service"),
+//	)
+//
+//	resp, err := client.Request("CreatePayment").
+//	    Path("/payments").
+//	    Body(payment).
+//	    Post(ctx)
+type Client struct {
+	// httpClient is the underlying HTTP client with transport chain.
+	httpClient *http.Client
+
+	// config holds all client configuration.
+	config *internalConfig
+
+	// baseURL is the base URL for all requests.
+	baseURL string
+
+	// defaultHeaders are applied to all requests.
+	defaultHeaders http.Header
+
+	// debug enables request/response logging.
+	debug bool
+
+	// generateCurl enables cURL command generation.
+	generateCurl bool
+
+	// enableTrace enables timing trace info collection.
+	enableTrace bool
+}
+
+// HTTP returns the underlying *http.Client for advanced use cases.
+//
+// Use this when you need to:
+//   - Pass the client to third-party libraries expecting *http.Client
+//   - Access transport-level settings
+//   - Make requests without the fluent builder
+//
+// Example:
+//
+//	rawClient := client.HTTP()
+//	resp, err := rawClient.Do(req)
+func (c *Client) HTTP() *http.Client {
+	return c.httpClient
+}
+
+// Request creates a new RequestBuilder for the given operation name.
+//
+// The operation name is used for:
+//   - OpenTelemetry span naming (e.g., "HTTP POST CreatePayment")
+//   - Debug logging identification
+//   - Metrics labeling
+//
+// Example:
+//
+//	resp, err := client.Request("CreateUser").
+//	    Path("/users").
+//	    Body(user).
+//	    Post(ctx)
+func (c *Client) Request(operationName string) *RequestBuilder {
+	return &RequestBuilder{
+		client:        c,
+		operationName: operationName,
+		headers:       make(http.Header),
+		pathParams:    make(map[string]string),
+	}
+}
+
+// New creates a Client with production-ready defaults and OpenTelemetry instrumentation.
+//
+// The client includes:
+//   - Connection pooling and timeouts
+//   - OpenTelemetry tracing and metrics
+//   - Retry with exponential backoff
+//   - Fluent request builder via Request()
 //
 // Example - Basic usage:
 //
-//	client := sentinelhttpclient.New(
-//	    sentinelhttpclient.WithServiceName("my-service"),
+//	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	    httpclient.WithServiceName("my-service"),
 //	)
-//	resp, err := client.Do(req)
 //
-// Example - Custom configuration:
-//
-//	cfg := sentinelhttpclient.HighThroughputConfig()
-//	cfg.Timeout = 10 * time.Second
-//
-//	client := sentinelhttpclient.New(
-//	    sentinelhttpclient.WithConfig(cfg),
-//	    sentinelhttpclient.WithServiceName("my-service"),
-//	)
+//	resp, err := client.Request("GetUsers").Get(ctx, "/users")
 //
 // Example - With retry configuration:
 //
-//	client := sentinelhttpclient.New(
-//	    sentinelhttpclient.WithRetryConfig(sentinelhttpclient.AggressiveRetryConfig()),
-//	    sentinelhttpclient.WithServiceName("my-service"),
+//	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	    httpclient.WithRetryConfig(httpclient.AggressiveRetryConfig()),
 //	)
-func New(opts ...Option) *http.Client {
+func New(opts ...Option) *Client {
 	cfg := newConfig(opts...)
 	transport := cfg.buildTransport()
 
@@ -45,9 +109,19 @@ func New(opts ...Option) *http.Client {
 	instrumented := newOtelTransport(transport, cfg)
 	withRetry := newRetryTransport(instrumented, cfg)
 
-	return &http.Client{
+	httpClient := &http.Client{
 		Transport: withRetry,
 		Timeout:   cfg.httpConfig.Timeout,
+	}
+
+	return &Client{
+		httpClient:     httpClient,
+		config:         cfg,
+		baseURL:        cfg.BaseURL,
+		defaultHeaders: cfg.DefaultHeaders,
+		debug:          cfg.Debug,
+		generateCurl:   cfg.GenerateCurl,
+		enableTrace:    cfg.EnableTrace,
 	}
 }
 
@@ -59,8 +133,8 @@ func New(opts ...Option) *http.Client {
 //
 // Example:
 //
-//	transport := sentinelhttpclient.NewTransport(http.DefaultTransport,
-//	    sentinelhttpclient.WithServiceName("my-service"),
+//	transport := httpclient.NewTransport(http.DefaultTransport,
+//	    httpclient.WithServiceName("my-service"),
 //	)
 //	client := &http.Client{
 //	    Transport: transport,
@@ -71,7 +145,7 @@ func NewTransport(base http.RoundTripper, opts ...Option) http.RoundTripper {
 	return newOtelTransport(base, cfg)
 }
 
-// NewWithTransport creates an HTTP client using a custom base transport
+// NewWithTransport creates a Client using a custom base transport
 // with OpenTelemetry instrumentation wrapped around it.
 //
 // The provided transport will be wrapped with tracing and metrics.
@@ -80,43 +154,61 @@ func NewTransport(base http.RoundTripper, opts ...Option) http.RoundTripper {
 //
 // Example:
 //
-//	// Custom transport with specific settings
 //	transport := &http.Transport{
 //	    MaxIdleConnsPerHost: 50,
 //	    DisableCompression:  true,
 //	}
-//	client := sentinelhttpclient.NewWithTransport(transport,
-//	    sentinelhttpclient.WithServiceName("my-service"),
-//	    sentinelhttpclient.WithTimeout(10 * time.Second),
+//	client := httpclient.NewWithTransport(transport,
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	    httpclient.WithServiceName("my-service"),
 //	)
-func NewWithTransport(base http.RoundTripper, opts ...Option) *http.Client {
+func NewWithTransport(base http.RoundTripper, opts ...Option) *Client {
 	cfg := newConfig(opts...)
-	return &http.Client{
+
+	httpClient := &http.Client{
 		Transport: newOtelTransport(base, cfg),
 		Timeout:   cfg.httpConfig.Timeout,
+	}
+
+	return &Client{
+		httpClient:     httpClient,
+		config:         cfg,
+		baseURL:        cfg.BaseURL,
+		defaultHeaders: cfg.DefaultHeaders,
+		debug:          cfg.Debug,
+		generateCurl:   cfg.GenerateCurl,
+		enableTrace:    cfg.EnableTrace,
 	}
 }
 
 // WrapClient wraps an existing http.Client's transport with OpenTelemetry instrumentation.
 //
-// This modifies the client in-place and returns it for chaining.
+// This modifies the client in-place and returns a new Client wrapper.
 // If the client has no transport, http.DefaultTransport is used.
 //
 // Example:
 //
-//	client := &http.Client{Timeout: 30 * time.Second}
-//	sentinelhttpclient.WrapClient(client,
-//	    sentinelhttpclient.WithServiceName("my-service"),
+//	httpClient := &http.Client{Timeout: 30 * time.Second}
+//	client := httpclient.WrapClient(httpClient,
+//	    httpclient.WithServiceName("my-service"),
 //	)
-//	// client is now instrumented
-func WrapClient(client *http.Client, opts ...Option) *http.Client {
+func WrapClient(httpClient *http.Client, opts ...Option) *Client {
 	cfg := newConfig(opts...)
 
-	base := client.Transport
+	base := httpClient.Transport
 	if base == nil {
 		base = http.DefaultTransport
 	}
 
-	client.Transport = newOtelTransport(base, cfg)
-	return client
+	httpClient.Transport = newOtelTransport(base, cfg)
+
+	return &Client{
+		httpClient:     httpClient,
+		config:         cfg,
+		baseURL:        cfg.BaseURL,
+		defaultHeaders: cfg.DefaultHeaders,
+		debug:          cfg.Debug,
+		generateCurl:   cfg.GenerateCurl,
+		enableTrace:    cfg.EnableTrace,
+	}
 }

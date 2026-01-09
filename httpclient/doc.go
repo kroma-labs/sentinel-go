@@ -13,12 +13,27 @@
 //
 // # Quick Start
 //
-// Basic usage with default configuration:
+// Basic usage with the fluent request builder:
 //
 //	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
 //	    httpclient.WithServiceName("my-service"),
 //	)
-//	resp, err := client.Do(req)
+//
+//	// Simple GET request
+//	resp, err := client.Request("GetUsers").Get(ctx, "/users")
+//
+//	// POST with JSON body and response decoding
+//	var user User
+//	resp, err := client.Request("CreateUser").
+//	    Body(newUser).
+//	    Decode(&user).
+//	    Post(ctx, "/users")
+//
+// For raw http.Client access (advanced usage):
+//
+//	httpClient := client.HTTP()
+//	resp, err := httpClient.Do(req)
 //
 // # Configuration Presets
 //
@@ -114,4 +129,47 @@
 //	httpclient.WrapClient(client,
 //	    httpclient.WithServiceName("my-service"),
 //	)
+//
+// # Fluent Request Builder
+//
+// The package provides a fluent API for building requests:
+//
+//	client := httpclient.New(
+//	    httpclient.WithBaseURL("https://api.example.com"),
+//	    httpclient.WithServiceName("payment-service"),
+//	)
+//
+//	var users []User
+//	resp, err := client.Request("GetUsers").
+//	    Query("page", "1").
+//	    Header("Authorization", "Bearer "+token).
+//	    Decode(&users).
+//	    Get(ctx, "/users")
+//
+//	if resp.IsSuccess() {
+//	    fmt.Printf("Got %d users\n", len(users))
+//	}
+//
+// File uploads are also supported:
+//
+//	resp, err := client.Request("Upload").
+//	    File("document", "/path/to/file.pdf").
+//	    FormField("title", "My Document").
+//	    Post(ctx, "/upload")
+//
+// # Debug Utilities
+//
+// Enable debug logging and cURL command generation:
+//
+//	client := httpclient.New(
+//	    httpclient.WithDebug(true),       // Logs requests/responses with zerolog
+//	    httpclient.WithGenerateCurl(true), // Generates cURL commands
+//	)
+//
+//	resp, err := client.Request("Test").
+//	    EnableTrace().  // Capture timing info
+//	    Get(ctx, "/api")
+//
+//	fmt.Println(resp.TraceInfo())   // DNS, connect, TLS, server timing
+//	fmt.Println(resp.CurlCommand()) // Equivalent cURL command
 package httpclient
