@@ -280,9 +280,7 @@ func (m *metrics) recordResponseBodySize(
 	m.responseBodySize.Record(ctx, size, metric.WithAttributes(attrs...))
 }
 
-// recordConnectionOpened records a connection being opened.
-//
-//nolint:unused // Reserved for future connection tracking via httptrace
+// recordConnectionOpened records a new connection being opened.
 func (m *metrics) recordConnectionOpened(ctx context.Context, attrs []attribute.KeyValue) {
 	if m == nil || m.openConnections == nil {
 		return
@@ -290,9 +288,7 @@ func (m *metrics) recordConnectionOpened(ctx context.Context, attrs []attribute.
 	m.openConnections.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
-// recordConnectionClosed records a connection being closed.
-//
-//nolint:unused // Reserved for future connection tracking via httptrace
+// recordConnectionClosed records a connection being returned to the pool.
 func (m *metrics) recordConnectionClosed(ctx context.Context, attrs []attribute.KeyValue) {
 	if m == nil || m.openConnections == nil {
 		return
@@ -346,20 +342,6 @@ func (m *metrics) recordTTFB(
 		return
 	}
 	m.ttfb.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
-}
-
-// recordContentTransferDuration records response body download duration.
-//
-//nolint:unused // Reserved for future response body tracking
-func (m *metrics) recordContentTransferDuration(
-	ctx context.Context,
-	duration time.Duration,
-	attrs []attribute.KeyValue,
-) {
-	if m == nil || m.contentTransferDuration == nil {
-		return
-	}
-	m.contentTransferDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
 // recordActiveRequestStart records a request starting.

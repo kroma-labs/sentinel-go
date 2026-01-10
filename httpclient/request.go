@@ -139,18 +139,45 @@ func (rb *RequestBuilder) Headers(headers map[string]string) *RequestBuilder {
 
 // Body sets the request body with automatic content type detection.
 //
-// Encoding rules:
-//   - struct/map: JSON (Content-Type: application/json)
-//   - string: raw text (Content-Type: text/plain)
-//   - []byte: raw bytes (Content-Type: application/octet-stream)
-//   - io.Reader: passthrough
-//   - url.Values: form encoded (Content-Type: application/x-www-form-urlencoded)
+// The content type is automatically determined based on the input type:
+//   - struct/map: Encoded as JSON (Content-Type: application/json)
+//   - string: Sent as plain text (Content-Type: text/plain; charset=utf-8)
+//   - []byte: Sent as binary data (Content-Type: application/octet-stream)
+//   - io.Reader: Passed through directly (no Content-Type set)
+//   - url.Values: Encoded as form data (Content-Type: application/x-www-form-urlencoded)
 //
-// Example:
+// For explicit encoding control, use the dedicated methods:
+//   - BodyJSON() - Force JSON encoding
+//   - BodyXML() - Force XML encoding
+//   - BodyForm() - Force form encoding
 //
-//	client.Request("CreateUser").
-//	    Body(user).  // struct -> JSON
+// Example with struct (auto-detected as JSON):
+//
+//	type User struct {
+//	    Name  string `json:"name"`
+//	    Email string `json:"email"`
+//	}
+//
+//	var user User
+//	resp, err := client.Request("CreateUser").
+//	    Body(user).
 //	    Post(ctx, "/users")
+//
+// Example with string:
+//
+//	resp, err := client.Request("SendMessage").
+//	    Body("Hello, World!").
+//	    Post(ctx, "/messages")
+//
+// Example with url.Values (form encoded):
+//
+//	form := url.Values{}
+//	form.Set("username", "john")
+//	form.Set("password", "secret")
+//
+//	resp, err := client.Request("Login").
+//	    Body(form).
+//	    Post(ctx, "/login")
 func (rb *RequestBuilder) Body(v any) *RequestBuilder {
 	if v == nil {
 		return rb
@@ -169,10 +196,8 @@ func (rb *RequestBuilder) Body(v any) *RequestBuilder {
 		rb.body = strings.NewReader(body.Encode())
 		rb.contentType = "application/x-www-form-urlencoded"
 	default:
-		// struct/map -> JSON
 		data, err := json.Marshal(v)
 		if err != nil {
-			// Store error for later - will be returned on execute
 			rb.body = &bodyEncodingError{err: err}
 			return rb
 		}
@@ -184,13 +209,28 @@ func (rb *RequestBuilder) Body(v any) *RequestBuilder {
 
 // BodyJSON explicitly encodes the body as JSON.
 //
-// Use this when you want to ensure JSON encoding regardless of the input type.
+// Use this method when you want to ensure JSON encoding regardless of the input type,
+// or when you want to be explicit about the encoding for code clarity.
+//
+// The Content-Type header is automatically set to "application/json".
 //
 // Example:
 //
-//	client.Request("CreateUser").
-//	    BodyJSON(user).
-//	    Post(ctx, "/users")
+//	type CreateUserRequest struct {
+//	    Name  string `json:"name"`
+//	    Email string `json:"email"`
+//	    Age   int    `json:"age"`
+//	}
+//
+//	req := CreateUserRequest{
+//	    Name:  "John Doe",
+//	    Email: "john@example.com",
+//	    Age:   30,
+//	}
+//
+//	resp, err := client.Request("CreateUser").
+//	    BodyJSON(req).
+//	    Post(ctx, "/api/users")
 func (rb *RequestBuilder) BodyJSON(v any) *RequestBuilder {
 	if v == nil {
 		return rb
@@ -207,11 +247,30 @@ func (rb *RequestBuilder) BodyJSON(v any) *RequestBuilder {
 
 // BodyXML explicitly encodes the body as XML.
 //
+// Use this method when interfacing with APIs that require XML payloads,
+// such as SOAP services or legacy enterprise systems.
+//
+// The Content-Type header is automatically set to "application/xml".
+// Make sure your struct fields have appropriate `xml` tags for proper encoding.
+//
 // Example:
 //
-//	client.Request("CreateOrder").
+//	type Order struct {
+//	    XMLName xml.Name `xml:"order"`
+//	    ID      string   `xml:"id"`
+//	    Amount  float64  `xml:"amount"`
+//	    Items   []Item   `xml:"items>item"`
+//	}
+//
+//	order := Order{
+//	    ID:     "ORD-123",
+//	    Amount: 99.99,
+//	    Items:  []Item{{Name: "Widget", Qty: 2}},
+//	}
+//
+//	resp, err := client.Request("CreateOrder").
 //	    BodyXML(order).
-//	    Post(ctx, "/orders")
+//	    Post(ctx, "/api/orders")
 func (rb *RequestBuilder) BodyXML(v any) *RequestBuilder {
 	if v == nil {
 		return rb
@@ -228,14 +287,29 @@ func (rb *RequestBuilder) BodyXML(v any) *RequestBuilder {
 
 // BodyForm sets form data as the request body.
 //
-// Example:
+// This method encodes the provided key-value pairs as URL-encoded form data,
+// commonly used for HTML form submissions and OAuth token requests.
 //
-//	client.Request("Login").
+// The Content-Type header is automatically set to "application/x-www-form-urlencoded".
+//
+// Example - Login form:
+//
+//	resp, err := client.Request("Login").
 //	    BodyForm(map[string]string{
-//	        "username": "john",
-//	        "password": "secret",
+//	        "username": "john@example.com",
+//	        "password": "secret123",
 //	    }).
-//	    Post(ctx, "/login")
+//	    Post(ctx, "/auth/login")
+//
+// Example - OAuth token request:
+//
+//	resp, err := client.Request("GetToken").
+//	    BodyForm(map[string]string{
+//	        "grant_type":    "client_credentials",
+//	        "client_id":     os.Getenv("CLIENT_ID"),
+//	        "client_secret": os.Getenv("CLIENT_SECRET"),
+//	    }).
+//	    Post(ctx, "/oauth/token")
 func (rb *RequestBuilder) BodyForm(data map[string]string) *RequestBuilder {
 	values := make(url.Values)
 	for k, v := range data {
@@ -248,14 +322,29 @@ func (rb *RequestBuilder) BodyForm(data map[string]string) *RequestBuilder {
 
 // Decode sets the target for automatic response body decoding.
 //
-// If the response is successful (2xx), the body is decoded into the target.
+// When a successful response is received (HTTP 2xx status codes),
+// the response body is automatically decoded into the provided target.
+// The decoding format is determined by the Content-Type header (JSON by default).
 //
-// Example:
+// If an error response is received (non-2xx), the body is not decoded into this target.
+// Use DecodeError() to handle error responses, or DecodeAny() for unified response structures.
+//
+// Example - Fetching a list of users:
+//
+//	type User struct {
+//	    ID    int    `json:"id"`
+//	    Name  string `json:"name"`
+//	    Email string `json:"email"`
+//	}
 //
 //	var users []User
 //	resp, err := client.Request("GetUsers").
 //	    Decode(&users).
-//	    Get(ctx, "/users")
+//	    Get(ctx, "/api/users")
+//	if err != nil {
+//	    return err
+//	}
+//	// users slice is now populated
 func (rb *RequestBuilder) Decode(v any) *RequestBuilder {
 	rb.result = v
 	return rb
@@ -263,15 +352,42 @@ func (rb *RequestBuilder) Decode(v any) *RequestBuilder {
 
 // DecodeError sets the target for automatic error response decoding.
 //
-// If the response is not successful (non-2xx), the body is decoded into the target.
+// When an error response is received (non-2xx status codes), the response body
+// is automatically decoded into the provided target. This is useful when APIs
+// return structured error information.
 //
-// Example:
+// This method is typically used together with Decode() to handle both success
+// and error responses with different structures.
 //
+// Example - Handling both success and error responses:
+//
+//	type User struct {
+//	    ID   int    `json:"id"`
+//	    Name string `json:"name"`
+//	}
+//
+//	type APIError struct {
+//	    Code    string `json:"code"`
+//	    Message string `json:"message"`
+//	    Details []struct {
+//	        Field string `json:"field"`
+//	        Error string `json:"error"`
+//	    } `json:"details,omitempty"`
+//	}
+//
+//	var user User
 //	var apiErr APIError
-//	resp, err := client.Request("CreateUser").
+//
+//	resp, err := client.Request("GetUser").
 //	    Decode(&user).
 //	    DecodeError(&apiErr).
-//	    Post(ctx, "/users")
+//	    Get(ctx, "/api/users/123")
+//	if err != nil {
+//	    return err
+//	}
+//	if resp.IsError() {
+//	    log.Printf("API error: %s - %s", apiErr.Code, apiErr.Message)
+//	}
 func (rb *RequestBuilder) DecodeError(v any) *RequestBuilder {
 	rb.errorResult = v
 	return rb
@@ -280,24 +396,31 @@ func (rb *RequestBuilder) DecodeError(v any) *RequestBuilder {
 // DecodeAny sets the target for automatic response decoding regardless of status code.
 //
 // Use this when your API returns the same response structure for both success
-// and error responses. The body is always decoded into the target.
+// and error responses. The body is always decoded into the target, regardless
+// of the HTTP status code.
+//
+// This is common in APIs that wrap all responses in a consistent envelope structure.
 //
 // Example - Unified response structure:
 //
-//	// API returns same structure for all responses:
-//	// { "data": {...}, "errors": [...] }
 //	type APIResponse struct {
-//	    Data   *User   `json:"data"`
-//	    Errors []Error `json:"errors"`
+//	    Success bool            `json:"success"`
+//	    Data    json.RawMessage `json:"data,omitempty"`
+//	    Error   *struct {
+//	        Code    string `json:"code"`
+//	        Message string `json:"message"`
+//	    } `json:"error,omitempty"`
 //	}
 //
-//	var result APIResponse
-//	resp, err := client.Request("CreateUser").
-//	    DecodeAny(&result).
-//	    Post(ctx, "/users")
-//
-//	if resp.IsError() {
-//	    // Handle result.Errors
+//	var response APIResponse
+//	resp, err := client.Request("GetData").
+//	    DecodeAny(&response).
+//	    Get(ctx, "/api/data")
+//	if err != nil {
+//	    return err
+//	}
+//	if !response.Success {
+//	    return fmt.Errorf("API error: %s", response.Error.Message)
 //	}
 func (rb *RequestBuilder) DecodeAny(v any) *RequestBuilder {
 	rb.result = v
@@ -307,12 +430,24 @@ func (rb *RequestBuilder) DecodeAny(v any) *RequestBuilder {
 
 // EnableTrace enables timing trace collection for this request.
 //
+// When enabled, detailed timing information is collected during the request,
+// including DNS lookup, connection establishment, TLS handshake, and time to
+// first byte. This is useful for debugging performance issues.
+//
+// Access the collected trace data via Response.TraceInfo().
+//
 // Example:
 //
 //	resp, err := client.Request("SlowAPI").
 //	    EnableTrace().
-//	    Get(ctx, "/slow")
-//	fmt.Println(resp.TraceInfo())
+//	    Get(ctx, "/api/slow-endpoint")
+//	if err != nil {
+//	    return err
+//	}
+//
+//	trace := resp.TraceInfo()
+//	fmt.Printf("DNS: %v, Connect: %v, TLS: %v, TTFB: %v\n",
+//	    trace.DNSLookup, trace.ConnTime, trace.TLSTime, trace.TTFB)
 func (rb *RequestBuilder) EnableTrace() *RequestBuilder {
 	rb.enableTrace = true
 	return rb
@@ -320,9 +455,26 @@ func (rb *RequestBuilder) EnableTrace() *RequestBuilder {
 
 // Get executes a GET request.
 //
-// Example:
+// The path parameter is optional if already set via Path(). If provided,
+// it overrides any previously set path. The path can include placeholders
+// for path parameters set via PathParam().
+//
+// Example - Simple GET:
 //
 //	resp, err := client.Request("GetUsers").Get(ctx, "/users")
+//
+// Example - GET with query parameters:
+//
+//	resp, err := client.Request("SearchUsers").
+//	    Query("name", "john").
+//	    Query("limit", "10").
+//	    Get(ctx, "/users")
+//
+// Example - GET with path parameters:
+//
+//	resp, err := client.Request("GetUser").
+//	    PathParam("id", userID).
+//	    Get(ctx, "/users/{id}")
 func (rb *RequestBuilder) Get(ctx context.Context, path ...string) (*Response, error) {
 	if len(path) > 0 {
 		rb.path = path[0]
@@ -332,11 +484,26 @@ func (rb *RequestBuilder) Get(ctx context.Context, path ...string) (*Response, e
 
 // Post executes a POST request.
 //
-// Example:
+// POST is typically used to create new resources or submit data for processing.
+// The request body should be set via Body(), BodyJSON(), BodyXML(), or BodyForm().
 //
+// Example - Create a resource:
+//
+//	type CreateUserRequest struct {
+//	    Name  string `json:"name"`
+//	    Email string `json:"email"`
+//	}
+//
+//	req := CreateUserRequest{Name: "John", Email: "john@example.com"}
 //	resp, err := client.Request("CreateUser").
-//	    Body(user).
+//	    Body(req).
 //	    Post(ctx, "/users")
+//
+// Example - Submit form data:
+//
+//	resp, err := client.Request("Login").
+//	    BodyForm(map[string]string{"username": "john", "password": "secret"}).
+//	    Post(ctx, "/auth/login")
 func (rb *RequestBuilder) Post(ctx context.Context, path ...string) (*Response, error) {
 	if len(path) > 0 {
 		rb.path = path[0]
@@ -346,9 +513,20 @@ func (rb *RequestBuilder) Post(ctx context.Context, path ...string) (*Response, 
 
 // Put executes a PUT request.
 //
+// PUT is typically used to replace an existing resource entirely.
+// The request body should contain the complete updated resource.
+//
 // Example:
 //
+//	type User struct {
+//	    ID    int    `json:"id"`
+//	    Name  string `json:"name"`
+//	    Email string `json:"email"`
+//	}
+//
+//	user := User{ID: 123, Name: "John Updated", Email: "john.new@example.com"}
 //	resp, err := client.Request("UpdateUser").
+//	    PathParam("id", "123").
 //	    Body(user).
 //	    Put(ctx, "/users/{id}")
 func (rb *RequestBuilder) Put(ctx context.Context, path ...string) (*Response, error) {
@@ -360,9 +538,14 @@ func (rb *RequestBuilder) Put(ctx context.Context, path ...string) (*Response, e
 
 // Patch executes a PATCH request.
 //
+// PATCH is typically used to partially update a resource, sending only the
+// fields that need to be changed rather than the entire resource.
+//
 // Example:
 //
+//	patch := map[string]any{"name": "Updated Name"}
 //	resp, err := client.Request("PatchUser").
+//	    PathParam("id", "123").
 //	    Body(patch).
 //	    Patch(ctx, "/users/{id}")
 func (rb *RequestBuilder) Patch(ctx context.Context, path ...string) (*Response, error) {
@@ -374,9 +557,20 @@ func (rb *RequestBuilder) Patch(ctx context.Context, path ...string) (*Response,
 
 // Delete executes a DELETE request.
 //
+// DELETE is used to remove a resource. DELETE requests typically don't have
+// a request body, though some APIs may accept one for additional parameters.
+//
 // Example:
 //
-//	resp, err := client.Request("DeleteUser").Delete(ctx, "/users/{id}")
+//	resp, err := client.Request("DeleteUser").
+//	    PathParam("id", userID).
+//	    Delete(ctx, "/users/{id}")
+//	if err != nil {
+//	    return err
+//	}
+//	if resp.StatusCode() == http.StatusNoContent {
+//	    log.Println("User deleted successfully")
+//	}
 func (rb *RequestBuilder) Delete(ctx context.Context, path ...string) (*Response, error) {
 	if len(path) > 0 {
 		rb.path = path[0]
@@ -506,10 +700,14 @@ func (rb *RequestBuilder) buildURL() (string, error) {
 		path = strings.ReplaceAll(path, "{"+k+"}", url.PathEscape(v))
 	}
 
-	// Build full URL
+	// Build full URL using url.JoinPath for proper path handling
 	var fullURL string
+	var err error
 	if rb.client.baseURL != "" {
-		fullURL = strings.TrimSuffix(rb.client.baseURL, "/") + "/" + strings.TrimPrefix(path, "/")
+		fullURL, err = url.JoinPath(rb.client.baseURL, path)
+		if err != nil {
+			return "", err
+		}
 	} else {
 		fullURL = path
 	}

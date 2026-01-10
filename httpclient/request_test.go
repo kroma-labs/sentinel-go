@@ -518,3 +518,23 @@ func TestRequestBuilder_BodyWithReader(t *testing.T) {
 	assert.Equal(t, reader, rb.body)
 	assert.Empty(t, rb.contentType)
 }
+
+func TestRequestBuilder_BodyWithWrapperTypes(t *testing.T) {
+	t.Run("given struct, then uses JSON encoding", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+		}
+
+		client := New()
+		rb := client.Request("test").Body(User{Name: "John"})
+
+		assert.Equal(t, "application/json", rb.contentType)
+	})
+
+	t.Run("given map, then uses JSON encoding", func(t *testing.T) {
+		client := New()
+		rb := client.Request("test").Body(map[string]string{"key": "value"})
+
+		assert.Equal(t, "application/json", rb.contentType)
+	})
+}
