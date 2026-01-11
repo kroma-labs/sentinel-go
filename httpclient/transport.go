@@ -145,15 +145,28 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Wrap response body to end span on close/EOF
 	// This ensures span duration includes body consumption time for streaming
 	if resp.Body != nil {
+		// Capture whether this was a new connection for closure tracking
+		wasNewConnection := nt != nil && !nt.connReused && !nt.connectStart.IsZero()
+
 		resp.Body = newWrappedBody(span, resp.Body, func(bytesRead int64) {
 			// Record actual response body size if it differs from Content-Length
 			if resp.ContentLength <= 0 && bytesRead > 0 {
 				t.cfg.Metrics.recordResponseBodySize(ctx, bytesRead, baseAttrs)
 			}
+
+			// Decrement open connections counter when request using new connection completes
+			if wasNewConnection {
+				t.cfg.Metrics.recordConnectionClosed(ctx, baseAttrs)
+			}
 		})
 	} else {
 		// No body to read, end span immediately
 		span.End()
+
+		// Still need to track connection closure for bodyless responses
+		if nt != nil && !nt.connReused && !nt.connectStart.IsZero() {
+			t.cfg.Metrics.recordConnectionClosed(ctx, baseAttrs)
+		}
 	}
 
 	return resp, nil

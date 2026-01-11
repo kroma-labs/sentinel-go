@@ -191,6 +191,11 @@ func (nt *networkTrace) recordTimingMetrics(
 		return
 	}
 
+	// Track new connection opened (not reused from pool)
+	if !nt.connReused && !nt.connectStart.IsZero() {
+		m.recordConnectionOpened(ctx, attrs)
+	}
+
 	// DNS duration
 	if !nt.dnsStart.IsZero() && !nt.dnsDone.IsZero() {
 		m.recordDNSDuration(ctx, nt.dnsDone.Sub(nt.dnsStart), attrs)

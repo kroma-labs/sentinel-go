@@ -60,13 +60,13 @@ func TestNew(t *testing.T) {
 			client := New(opts...)
 
 			assert.NotNil(t, client)
-			assert.NotNil(t, client.Transport)
-			assert.Equal(t, tt.wantTimeout, client.Timeout)
+			assert.NotNil(t, client.HTTP().Transport)
+			assert.Equal(t, tt.wantTimeout, client.HTTP().Timeout)
 
 			// Transport can be either retryTransport (wrapping otelTransport) or
 			// otelTransport directly (if retries disabled)
-			_, isRetry := client.Transport.(*retryTransport)
-			_, isOtel := client.Transport.(*otelTransport)
+			_, isRetry := client.HTTP().Transport.(*retryTransport)
+			_, isOtel := client.HTTP().Transport.(*otelTransport)
 			assert.True(t, isRetry || isOtel, "expected retryTransport or otelTransport")
 		})
 	}
@@ -127,7 +127,7 @@ func TestNew_RequestExecution(t *testing.T) {
 			req, err := http.NewRequest(http.MethodGet, server.URL+"/test", nil)
 			require.NoError(t, err)
 
-			resp, err := client.Do(req)
+			resp, err := client.HTTP().Do(req)
 			require.NoError(t, err)
 
 			// Must consume and close body before checking spans
@@ -206,7 +206,7 @@ func TestNewWithTransport(t *testing.T) {
 			)
 
 			assert.NotNil(t, client)
-			assert.NotNil(t, client.Transport)
+			assert.NotNil(t, client.HTTP().Transport)
 		})
 	}
 }
@@ -249,9 +249,9 @@ func TestWrapClient(t *testing.T) {
 
 			wrapped := WrapClient(client, WithServiceName(tt.args.serviceName))
 
-			assert.Equal(t, client, wrapped)
-			assert.NotNil(t, wrapped.Transport)
-			_, ok := wrapped.Transport.(*otelTransport)
+			assert.Equal(t, client, wrapped.HTTP())
+			assert.NotNil(t, wrapped.HTTP().Transport)
+			_, ok := wrapped.HTTP().Transport.(*otelTransport)
 			assert.True(t, ok)
 		})
 	}
