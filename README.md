@@ -1,76 +1,113 @@
 <div align="center">
-  <img src=".assets/sentinel.jpg" alt="Sentinel-Go Logo" width="200"/>
+  <img src=".assets/sentinel.png" alt="Sentinel-Go Logo" width="200"/>
   <h1>Sentinel-Go</h1>
+  <p><b>Production-Ready Observability & Resilience for Go Applications</b></p>
   <p>
-    <b>The Opinionated, Production-Ready OpenTelemetry Wrapper for Go.</b>
+    <i>Stop wiring retries, circuit breakers, and traces manually.<br/>
+    Sentinel-Go gives you battle-tested defaults that just work.</i>
   </p>
 
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kroma-labs/sentinel-go.svg)](https://pkg.go.dev/github.com/kroma-labs/sentinel-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/kroma-labs/sentinel-go)](https://goreportcard.com/report/github.com/kroma-labs/sentinel-go)
-[![License](https://img.shields.io/github/license/kroma-labs/sentinel-go)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Coverage](https://img.shields.io/badge/coverage-72%25-yellowgreen)](https://codecov.io/gh/kroma-labs/sentinel-go)
 
 </div>
 
 ---
 
-**Sentinel-Go** provides drop-in, zero-config OpenTelemetry instrumentation for your Go applications. It wraps standard libraries (like `database/sql`) to strictly enforce observability best practices, ensuring your logs, metrics, and traces are production-ready from day one.
+## Why Sentinel-Go?
 
-## ✨ Features
+Building reliable microservices in Go means handling a lot of cross-cutting concerns:
 
-- **🛡️ Secure by Design**: Automatic sanitization of SQL queries to prevent PII leakage.
-- **🔌 Drop-in Replacement**: Compatible with standard library interfaces (`*sql.DB`).
-- **📊 Rich Telemetry**:
-  - **Tracing**: Full span hierarchy with semantic conventions (`db.system`, `db.operation`).
-  - **Metrics**: Standardized histograms for query latency and connection pool gauges.
-- **🧩 Modular**: Import only what you need (e.g., `sentinel-go/sql`).
+❌ **Without Sentinel-Go:**
 
-## 📦 Installation
+- Manually configuring OpenTelemetry for every database query
+- Copy-pasting retry logic with exponential backoff across services
+- Implementing circuit breakers that may or may not work under load
+- Inconsistent timeout configurations that cause cascading failures
+
+✅ **With Sentinel-Go:**
+
+- **Drop-in replacements** for `database/sql`, `sqlx`, and `net/http`
+- **Production-tuned defaults** based on industry best practices (Hystrix, Google SRE)
+- **Full observability** with traces and metrics out of the box
+- **Resilience patterns** (retry, circuit breaker) that are battle-tested
+
+```go
+// One line. Full observability. Production-ready resilience.
+client := httpclient.New(
+    httpclient.WithServiceName("payment-api"),
+    httpclient.WithRetryConfig(httpclient.DefaultRetryConfig()),
+    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+)
+```
+
+---
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+  - [SQL](#sql-wrapper)
+  - [SQLX](#sqlx-wrapper)
+  - [HTTP Client](#http-client)
+- [HTTP Client Features](#http-client-features)
+  - [Fluent Request Builder](#fluent-request-builder)
+  - [Retry Configuration](#retry-configuration)
+  - [Circuit Breaker](#circuit-breaker)
+- [Configuration Reference](#configuration-reference)
+- [Observability](#observability)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Installation
 
 ```bash
 go get github.com/kroma-labs/sentinel-go
 ```
 
-## 🚀 Quick Start: SQL
+**Requirements:** Go 1.22+
 
-Use `sentinelsql` as a replacement for `sql.Open`. It returns a standard `*sql.DB`.
+---
+
+## Quick Start
+
+### SQL Wrapper
+
+Drop-in replacement for `database/sql` with automatic tracing and metrics.
 
 ```go
 import (
-    "context"
     sentinelsql "github.com/kroma-labs/sentinel-go/sql"
-    _ "github.com/lib/pq" // Import your driver as usual
+    _ "github.com/lib/pq"
 )
 
 func main() {
-    // 1. Open Connection with Sentinel
-    // Automatically wraps the driver with OTel instrumentation
-    db, err := sentinelsql.Open("postgres", "postgres://...",
+    db, err := sentinelsql.Open("postgres", "postgres://localhost/mydb",
         sentinelsql.WithDBSystem("postgresql"),
-        sentinelsql.WithDBName("main_db"),
+        sentinelsql.WithDBName("mydb"),
     )
     if err != nil {
-        panic(err)
+        log.Fatal(err)
     }
     defer db.Close()
 
-    // 2. Register Connection Pool Metrics (Optional)
-    // Tracks Open/Idle/Max connections and Wait times
-    // Auto-detects attributes from the driver!
-    sentinelsql.RecordPoolMetrics(db, otel.GetMeterProvider().Meter("myapp"))
-
-    // 3. Use standard *sql.DB methods
-    // Context is REQUIRED for tracing propagation
+    // Use standard *sql.DB methods - all instrumented!
     db.QueryContext(ctx, "SELECT * FROM users WHERE id = $1", 123)
 }
 ```
 
-## 🚀 Quick Start: SQLX
+### SQLX Wrapper
 
-Use `sentinelsqlx` for `jmoiron/sqlx` with full struct scanning support.
+Full support for `jmoiron/sqlx` with struct scanning.
 
 ```go
 import (
-    "context"
     sentinelsqlx "github.com/kroma-labs/sentinel-go/sqlx"
     _ "github.com/lib/pq"
 )
@@ -81,53 +118,219 @@ type User struct {
 }
 
 func main() {
-    // 1. Open Connection with Sentinel SQLX
-    db, err := sentinelsqlx.Open("postgres", "postgres://...",
+    db, err := sentinelsqlx.Open("postgres", "postgres://localhost/mydb",
         sentinelsqlx.WithDBSystem("postgresql"),
-        sentinelsqlx.WithDBName("main_db"),
+        sentinelsqlx.WithDBName("mydb"),
     )
     if err != nil {
-        panic(err)
+        log.Fatal(err)
     }
-    defer db.Close()
 
-    // 2. Use sqlx methods - all instrumented!
     var user User
     db.GetContext(ctx, &user, "SELECT * FROM users WHERE id = $1", 1)
 
     var users []User
-    db.SelectContext(ctx, &users, "SELECT * FROM users")
-
-    // 3. Transactions with tracing
-    tx, _ := db.BeginTxx(ctx, nil)
-    tx.ExecContext(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
-    tx.Commit()
+    db.SelectContext(ctx, &users, "SELECT * FROM users LIMIT 10")
 }
 ```
 
-## ⚙️ Configuration Options
+### HTTP Client
 
-Customize behavior using functional options:
+Production-ready HTTP client with retries, circuit breaker, and full observability.
 
-| Option               | Description                                                   | Example                               |
-| -------------------- | ------------------------------------------------------------- | ------------------------------------- |
-| `WithDBSystem`       | Sets the `db.system` attribute (required for OTel spec).      | `WithDBSystem("postgresql")`          |
-| `WithDBName`         | Sets the `db.name` attribute.                                 | `WithDBName("users_db")`              |
-| `WithInstanceName`   | Distinguish different instances (e.g., "primary", "replica"). | `WithInstanceName("read-replica-01")` |
-| `WithDisableQuery`   | Disables recording the SQL query text in spans.               | `WithDisableQuery()`                  |
-| `WithQuerySanitizer` | Custom function to sanitize SQL queries.                      | `WithQuerySanitizer(myFunc)`          |
+```go
+import "github.com/kroma-labs/sentinel-go/httpclient"
 
-## 🏗️ Modules
+func main() {
+    client := httpclient.New(
+        httpclient.WithBaseURL("https://api.example.com"),
+        httpclient.WithServiceName("my-service"),
+    )
 
-| Module           | Status     | Description                                        |
-| ---------------- | ---------- | -------------------------------------------------- |
-| [`sql`](./sql)   | ✅ Stable  | Wrapper for `database/sql` with tracing & metrics. |
-| [`sqlx`](./sqlx) | ✅ Stable  | Wrapper for `jmoiron/sqlx` with tracing & metrics. |
-| `http`           | 🚧 Planned | Instrumented HTTP Client/Server.                   |
+    // Simple GET
+    resp, err := client.Request("GetUsers").Get(ctx, "/users")
 
-## 🤝 Contributing
+    // POST with JSON body
+    resp, err := client.Request("CreateUser").
+        Body(map[string]string{"name": "John"}).
+        Post(ctx, "/users")
 
-Contributions are welcome! Please check out the [example directory](./example) for runnable demos.
+    // With response decoding
+    var user User
+    resp, err := client.Request("GetUser").
+        Decode(&user).
+        Get(ctx, "/users/123")
+}
+```
+
+---
+
+## HTTP Client Features
+
+### Fluent Request Builder
+
+Build requests with a clean, chainable API:
+
+```go
+resp, err := client.Request("CreatePayment").
+    Path("/payments").
+    PathParam("id", "pay_123").           // URL path substitution
+    Query("include", "items").            // Query parameters
+    Header("X-Idempotency-Key", "abc").   // Custom headers
+    Body(paymentRequest).                 // Auto-detect JSON/Form
+    Decode(&response).                    // Auto-decode response
+    Post(ctx)
+```
+
+### Retry Configuration
+
+Pre-configured retry strategies with exponential backoff:
+
+```go
+// Default: 3 retries, 100ms-5s backoff
+client := httpclient.New(
+    httpclient.WithRetryConfig(httpclient.DefaultRetryConfig()),
+)
+
+// Aggressive: 5 retries, faster backoff
+client := httpclient.New(
+    httpclient.WithRetryConfig(httpclient.AggressiveRetryConfig()),
+)
+
+// Conservative: 2 retries, slower backoff
+client := httpclient.New(
+    httpclient.WithRetryConfig(httpclient.ConservativeRetryConfig()),
+)
+
+// Custom configuration
+client := httpclient.New(
+    httpclient.WithRetryConfig(httpclient.RetryConfig{
+        MaxRetries:      5,
+        InitialInterval: 200 * time.Millisecond,
+        MaxInterval:     10 * time.Second,
+        Multiplier:      2.0,
+    }),
+)
+```
+
+### Circuit Breaker
+
+Prevent cascading failures with automatic circuit breaking:
+
+```go
+// Local circuit breaker (in-memory, per-instance)
+client := httpclient.New(
+    httpclient.WithServiceName("payment-api"),
+    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+)
+
+// Distributed circuit breaker (Redis-backed, shared across instances)
+import "github.com/redis/go-redis/v9"
+
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+store := httpclient.NewRedisStore(rdb)
+
+client := httpclient.New(
+    httpclient.WithServiceName("payment-api"),
+    httpclient.WithBreakerConfig(httpclient.DistributedBreakerConfig(store)),
+)
+```
+
+**Default Settings (Production-Tuned):**
+
+| Setting               | Value | Description                           |
+| --------------------- | ----- | ------------------------------------- |
+| `ConsecutiveFailures` | 5     | Trip after 5 consecutive failures     |
+| `FailureThreshold`    | 20    | Minimum requests before ratio applies |
+| `FailureRatio`        | 0.5   | 50% failure rate trips breaker        |
+| `Timeout`             | 10s   | Time in Open state before probing     |
+| `Interval`            | 10s   | Reset window for failure counts       |
+
+---
+
+## Configuration Reference
+
+### HTTP Transport Options
+
+| Option                   | Description                      | Default           |
+| ------------------------ | -------------------------------- | ----------------- |
+| `WithConfig(cfg)`        | Full transport configuration     | `DefaultConfig()` |
+| `WithServiceName(name)`  | Identifier for traces/metrics    | Required          |
+| `WithBaseURL(url)`       | Base URL for requests            | -                 |
+| `WithRetryConfig(cfg)`   | Retry configuration              | Disabled          |
+| `WithBreakerConfig(cfg)` | Circuit breaker config           | Disabled          |
+| `WithDefaultHeaders(h)`  | Default headers for all requests | -                 |
+| `WithDebug(enabled)`     | Enable request/response logging  | `false`           |
+
+### SQL/SQLX Options
+
+| Option                   | Description            | Example                   |
+| ------------------------ | ---------------------- | ------------------------- |
+| `WithDBSystem(system)`   | Database type          | `"postgresql"`, `"mysql"` |
+| `WithDBName(name)`       | Database name          | `"users_db"`              |
+| `WithInstanceName(name)` | Instance identifier    | `"read-replica-01"`       |
+| `WithDisableQuery()`     | Hide SQL in spans      | -                         |
+| `WithQuerySanitizer(fn)` | Custom query sanitizer | -                         |
+
+---
+
+## Observability
+
+### Metrics Emitted
+
+**HTTP Client:**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `http.client.request.duration` | Histogram | Request latency |
+| `http.client.circuit_breaker.state` | Gauge | 0=Closed, 1=HalfOpen, 2=Open |
+| `http.client.circuit_breaker.requests` | Counter | Requests by result |
+
+**SQL/SQLX:**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `db.client.query.duration` | Histogram | Query latency |
+| `db.client.connections.open` | Gauge | Open connections |
+| `db.client.connections.idle` | Gauge | Idle connections |
+
+### Trace Attributes
+
+All spans include semantic convention attributes:
+
+- `http.method`, `http.url`, `http.status_code`
+- `db.system`, `db.name`, `db.operation`
+- `http.client.name` (service identifier)
+
+---
+
+## Roadmap
+
+| Phase | Feature                          | Status      |
+| ----- | -------------------------------- | ----------- |
+| 1     | SQL/SQLX Observability           | ✅ Complete |
+| 2     | HTTP Client + Fluent Builder     | ✅ Complete |
+| 3     | Retry & Circuit Breaker          | ✅ Complete |
+| 4     | Chaos Injection, Hedged Requests | 🔜 Planned  |
+| 5     | HTTP Server Observability        | 🔜 Planned  |
+
+---
+
+## Contributing
+
+Contributions are welcome! Check out the [example directory](./example) for runnable demos.
+
+```bash
+# Run tests
+make test
+
+# Run linter
+make lint
+```
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
