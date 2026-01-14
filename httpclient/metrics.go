@@ -67,6 +67,16 @@ type metrics struct {
 	// retryDuration measures total time spent in retry loop.
 	// Includes all attempts and wait times.
 	retryDuration metric.Float64Histogram
+
+	// === Circuit Breaker Metrics ===
+
+	// breakerState tracks the current state of the circuit breaker.
+	// 0=Closed, 1=HalfOpen, 2=Open
+	breakerState metric.Int64Gauge
+
+	// breakerRequests counts circuit breaker requests by result.
+	// result tag: success, failure, rejected
+	breakerRequests metric.Int64Counter
 }
 
 // newMetrics creates and registers metric instruments.
@@ -241,6 +251,27 @@ func newMetrics(meter metric.Meter) (*metrics, error) {
 		return nil, err
 	}
 
+	// Breaker state gauge
+	m.breakerState, err = meter.Int64Gauge(
+		"http.client.circuit_breaker.state",
+		metric.WithDescription(
+			"Current state of the circuit breaker (0=Closed, 1=HalfOpen, 2=Open)",
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Breaker requests counter
+	m.breakerRequests, err = meter.Int64Counter(
+		"http.client.circuit_breaker.requests",
+		metric.WithDescription("Number of circuit breaker requests"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return m, nil
 }
 
@@ -400,4 +431,25 @@ func (m *metrics) recordRetryDuration(
 		return
 	}
 	m.retryDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+}
+
+// recordBreakerState records the current state of the circuit breaker.
+func (m *metrics) recordBreakerState(ctx context.Context, name string, state int64) {
+	if m == nil || m.breakerState == nil {
+		return
+	}
+	m.breakerState.Record(ctx, state, metric.WithAttributes(
+		attribute.String("breaker.name", name),
+	))
+}
+
+// recordBreakerRequest records a circuit breaker request execution.
+func (m *metrics) recordBreakerRequest(ctx context.Context, name string, result string) {
+	if m == nil || m.breakerRequests == nil {
+		return
+	}
+	m.breakerRequests.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("breaker.name", name),
+		attribute.String("breaker.result", result),
+	))
 }

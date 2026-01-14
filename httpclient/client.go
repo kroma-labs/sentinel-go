@@ -105,12 +105,12 @@ func New(opts ...Option) *Client {
 	cfg := newConfig(opts...)
 	transport := cfg.buildTransport()
 
-	// Build transport chain: base -> otel tracing -> retry
-	instrumented := newOtelTransport(transport, cfg)
-	withRetry := newRetryTransport(instrumented, cfg)
+	withRetry := newRetryTransport(transport, cfg)
+	withBreaker := newCircuitBreakerTransport(withRetry, cfg)
+	instrumented := newOtelTransport(withBreaker, cfg)
 
 	httpClient := &http.Client{
-		Transport: withRetry,
+		Transport: instrumented,
 		Timeout:   cfg.httpConfig.Timeout,
 	}
 

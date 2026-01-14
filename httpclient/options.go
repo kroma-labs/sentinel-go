@@ -543,6 +543,12 @@ type internalConfig struct {
 	// If nil, uses ExponentialBackOff based on RetryConfig.
 	RetryBackOff backoff.BackOff
 
+	// === Circuit Breaker Configuration ===
+
+	// BreakerConfig holds the circuit breaker configuration.
+	// If nil, the circuit breaker is disabled.
+	BreakerConfig *BreakerConfig
+
 	// === Request Builder Configuration ===
 
 	// BaseURL is the base URL for all requests made via the Request builder.
@@ -1124,6 +1130,24 @@ func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
 		} else {
 			cfg.RetryBackOff = NewTieredRetryBackOff(tiers, maxDelay, DefaultJitterFactor)
 		}
+	}
+}
+
+// =============================================================================
+// Circuit Breaker Options
+// =============================================================================
+
+// WithBreakerConfig sets the circuit breaker configuration.
+// If not provided, the circuit breaker is disabled.
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+//	)
+func WithBreakerConfig(c BreakerConfig) Option {
+	return func(cfg *internalConfig) {
+		cfg.BreakerConfig = &c
 	}
 }
 

@@ -7,6 +7,7 @@
 //   - Prometheus-compatible metrics for request latency, errors, retries
 //   - Automatic retries with exponential backoff and jitter
 //   - Semantic retry classification (429, 502-504 → retry; 4xx → stop)
+//   - Circuit Breaker pattern (Local and Distributed Redis-backed)
 //   - Connection pooling with configurable limits
 //   - Network tracing (DNS, TLS, connect timing)
 //   - Request filtering for selective tracing
@@ -98,6 +99,44 @@
 //	    httpclient.WithTieredRetry(tiers, 10*time.Minute),
 //	)
 //
+// # Circuit Breaker Configuration
+//
+// The client supports both local (in-memory) and distributed (Redis-backed) circuit breakers.
+// The breaker is scoped to the client instance and named using the ServiceName.
+//
+// Local Circuit Breaker (Default):
+//
+//	client := httpclient.New(
+//	    httpclient.WithServiceName("payment-service"),
+//	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+//	)
+//
+// Distributed Circuit Breaker (Redis):
+//
+//	// Initialize Redis client
+//	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+//	store := httpclient.NewRedisStore(rdb)
+//
+//	// Create config using the store
+//	client := httpclient.New(
+//	    httpclient.WithServiceName("payment-service"),
+//	    httpclient.WithBreakerConfig(httpclient.DistributedBreakerConfig(store)),
+//	)
+//
+// Note: If distributed breaker initialization fails (e.g., due to configuration issues),
+// the client automatically falls back to a Local Circuit Breaker to ensure the service remains protected (Graceful Degradation).
+//
+// Custom Configuration:
+//
+//	cfg := httpclient.DefaultBreakerConfig()
+//	cfg.FailureThreshold = 5
+//	cfg.Timeout = 60 * time.Second
+//
+//	client := httpclient.New(
+//	    httpclient.WithServiceName("critical-service"),
+//	    httpclient.WithBreakerConfig(cfg),
+//	)
+//
 // # Observability
 //
 // The client automatically emits:
@@ -106,6 +145,8 @@
 //   - http.client.request.duration (histogram)
 //   - http.client.retry.attempts (counter)
 //   - http.client.retry.exhausted (counter)
+//   - http.client.circuit_breaker.state (gauge, 0=Closed, 1=HalfOpen, 2=Open)
+//   - http.client.circuit_breaker.requests (counter, result=success/failure/rejected)
 //   - http.client.dns.duration (histogram)
 //   - http.client.tls.duration (histogram)
 //
