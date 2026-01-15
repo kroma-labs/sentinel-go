@@ -48,18 +48,25 @@ client := httpclient.New(
 
 ## Table of Contents
 
+- [Why Sentinel-Go?](#why-sentinel-go)
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-  - [SQL](#sql-wrapper)
-  - [SQLX](#sqlx-wrapper)
+  - [SQL Wrapper](#sql-wrapper)
+  - [SQLX Wrapper](#sqlx-wrapper)
   - [HTTP Client](#http-client)
 - [HTTP Client Features](#http-client-features)
   - [Fluent Request Builder](#fluent-request-builder)
   - [Retry Configuration](#retry-configuration)
   - [Circuit Breaker](#circuit-breaker)
 - [Configuration Reference](#configuration-reference)
+  - [HTTP Transport Options](#http-transport-options)
+  - [SQL/SQLX Options](#sqlsqlx-options)
 - [Observability](#observability)
+  - [Metrics Emitted](#metrics-emitted)
+  - [Trace Attributes](#trace-attributes)
 - [Roadmap](#roadmap)
+- [Deep Dive](#deep-dive)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -304,13 +311,29 @@ All spans include semantic convention attributes:
 
 ## Roadmap
 
-| Phase | Feature                          | Status      |
-| ----- | -------------------------------- | ----------- |
-| 1     | SQL/SQLX Observability           | ✅ Complete |
-| 2     | HTTP Client + Fluent Builder     | ✅ Complete |
-| 3     | Retry & Circuit Breaker          | ✅ Complete |
-| 4     | Chaos Injection, Hedged Requests | 🔜 Planned  |
-| 5     | HTTP Server Observability        | 🔜 Planned  |
+| Phase | Feature                            | Status      |
+| ----- | ---------------------------------- | ----------- |
+| 1     | SQL/SQLX Observability             | ✅ Complete |
+| 2     | HTTP Client + Fluent Builder       | ✅ Complete |
+| 3     | Retry & Circuit Breaker            | ✅ Complete |
+| 4     | Chaos Injection, Hedged Requests   | ✅ Complete |
+| 5     | Request Coalescing & Rate Limiting | ✅ Complete |
+| 6     | Interceptors & Mock Transport      | ✅ Complete |
+| 7     | HTTP Server Observability          | 🔜 Planned  |
+
+---
+
+## Deep Dive
+
+For a comprehensive technical explanation of each feature, including architecture diagrams, algorithm details, and advanced usage patterns, see **[DEEP_DIVE.md](./DEEP_DIVE.md)**.
+
+Topics covered:
+
+- SQL driver wrapping and query sanitization
+- Transport chain architecture
+- Circuit breaker state machine
+- Adaptive hedging algorithm
+- Rate limiting strategies
 
 ---
 
