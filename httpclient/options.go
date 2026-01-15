@@ -549,6 +549,24 @@ type internalConfig struct {
 	// If nil, the circuit breaker is disabled.
 	BreakerConfig *BreakerConfig
 
+	// === Chaos Injection Configuration ===
+
+	// ChaosConfig holds the chaos injection configuration for testing.
+	// If nil, chaos injection is disabled.
+	ChaosConfig *ChaosConfig
+
+	// === Rate Limiting Configuration ===
+
+	// RateLimitConfig holds the client-level rate limiting configuration.
+	// If nil or RequestsPerSecond <= 0, rate limiting is disabled.
+	RateLimitConfig *RateLimitConfig
+
+	// === Interceptor Configuration ===
+
+	// Interceptors holds the client-level interceptor chain.
+	// These interceptors are applied to all requests made by this client.
+	Interceptors *InterceptorChain
+
 	// === Request Builder Configuration ===
 
 	// BaseURL is the base URL for all requests made via the Request builder.
@@ -566,6 +584,12 @@ type internalConfig struct {
 
 	// EnableTrace enables timing trace info collection.
 	EnableTrace bool
+
+	// === Testing Configuration ===
+
+	// MockTransport is an optional mock transport for testing.
+	// If set, this replaces the entire transport chain.
+	MockTransport http.RoundTripper
 }
 
 // newConfig creates a new internal config with defaults and applies options.
@@ -1151,6 +1175,38 @@ func WithBreakerConfig(c BreakerConfig) Option {
 	}
 }
 
+// WithChaos enables chaos injection for testing resilience patterns.
+//
+// Chaos injection allows you to simulate failures in development/testing
+// environments to verify that retry logic, circuit breakers, and fallbacks
+// work correctly.
+//
+// WARNING: Do not use in production. This will intentionally degrade
+// service performance and reliability.
+//
+// Example - Simulate slow responses:
+//
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        LatencyMs:       200,  // Add 200ms delay
+//	        LatencyJitterMs: 100,  // Add 0-100ms jitter
+//	    }),
+//	)
+//
+// Example - Simulate failures to test circuit breaker:
+//
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        ErrorRate: 0.5, // 50% of requests fail
+//	    }),
+//	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+//	)
+func WithChaos(c ChaosConfig) Option {
+	return func(cfg *internalConfig) {
+		cfg.ChaosConfig = &c
+	}
+}
+
 // =============================================================================
 // Request Builder Options
 // =============================================================================
@@ -1243,5 +1299,110 @@ func WithDebug(enabled bool) Option {
 func WithGenerateCurl(enabled bool) Option {
 	return func(cfg *internalConfig) {
 		cfg.GenerateCurl = enabled
+	}
+}
+
+// WithRateLimit configures client-level rate limiting.
+//
+// All requests made by this client will be subject to the rate limit.
+// Use this to respect API quotas and prevent 429 errors.
+//
+// The rate limiter uses a token bucket algorithm:
+//   - RequestsPerSecond: sustained rate
+//   - Burst: allows brief spikes above the rate
+//   - WaitOnLimit: if true, waits for token; if false, returns error
+//
+// Example - Basic rate limiting (100 req/s, burst of 10):
+//
+//	client := httpclient.New(
+//	    httpclient.WithRateLimit(httpclient.DefaultRateLimitConfig()),
+//	)
+//
+// Example - Custom rate limit:
+//
+//	client := httpclient.New(
+//	    httpclient.WithRateLimit(httpclient.RateLimitConfig{
+//	        RequestsPerSecond: 50,
+//	        Burst:             5,
+//	        WaitOnLimit:       true, // Wait for token
+//	    }),
+//	)
+//
+// Example - Fail fast on rate limit:
+//
+//	client := httpclient.New(
+//	    httpclient.WithRateLimit(httpclient.RateLimitConfig{
+//	        RequestsPerSecond: 100,
+//	        Burst:             10,
+//	        WaitOnLimit:       false, // Return ErrRateLimited immediately
+//	    }),
+//	)
+func WithRateLimit(cfg RateLimitConfig) Option {
+	return func(c *internalConfig) {
+		c.RateLimitConfig = &cfg
+	}
+}
+
+// WithRequestInterceptor adds a request interceptor that runs before each request.
+//
+// Interceptors are executed in the order they are added. Common use cases:
+//   - Authentication (bearer tokens, API keys)
+//   - Correlation ID injection
+//   - Request logging
+//   - Custom header manipulation
+//
+// Example - Add bearer token:
+//
+//	client := httpclient.New(
+//	    httpclient.WithRequestInterceptor(httpclient.AuthBearerInterceptor("my-token")),
+//	)
+//
+// Example - Dynamic token refresh:
+//
+//	client := httpclient.New(
+//	    httpclient.WithRequestInterceptor(httpclient.AuthBearerFuncInterceptor(func() (string, error) {
+//	        return tokenManager.GetToken()
+//	    })),
+//	)
+//
+// Example - Custom interceptor:
+//
+//	client := httpclient.New(
+//	    httpclient.WithRequestInterceptor(func(req *http.Request) error {
+//	        req.Header.Set("X-Custom-Header", "value")
+//	        return nil
+//	    }),
+//	)
+func WithRequestInterceptor(i RequestInterceptor) Option {
+	return func(c *internalConfig) {
+		if c.Interceptors == nil {
+			c.Interceptors = NewInterceptorChain()
+		}
+		c.Interceptors.AddRequestInterceptor(i)
+	}
+}
+
+// WithResponseInterceptor adds a response interceptor that runs after each response.
+//
+// Interceptors are executed in the order they are added. Common use cases:
+//   - Response logging
+//   - Metrics collection
+//   - Error transformation
+//   - Token refresh on 401
+//
+// Example - Log responses:
+//
+//	client := httpclient.New(
+//	    httpclient.WithResponseInterceptor(func(resp *http.Response, req *http.Request) error {
+//	        log.Printf("%s %s -> %d", req.Method, req.URL, resp.StatusCode)
+//	        return nil
+//	    }),
+//	)
+func WithResponseInterceptor(i ResponseInterceptor) Option {
+	return func(c *internalConfig) {
+		if c.Interceptors == nil {
+			c.Interceptors = NewInterceptorChain()
+		}
+		c.Interceptors.AddResponseInterceptor(i)
 	}
 }

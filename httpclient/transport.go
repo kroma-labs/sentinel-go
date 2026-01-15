@@ -124,6 +124,14 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
+	// Guard against nil response with nil error (should not happen in valid Transport)
+	if resp == nil {
+		err = fmt.Errorf("transport returned nil response with nil error")
+		setSpanError(span, err, "internal_error")
+		span.End()
+		return nil, err
+	}
+
 	// Record response attributes
 	span.SetAttributes(t.responseAttributes(resp)...)
 

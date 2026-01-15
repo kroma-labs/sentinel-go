@@ -9,6 +9,7 @@ import (
 	"net/http/httptrace"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,8 @@ const (
 
 // networkTrace holds timing data collected from httptrace.ClientTrace.
 type networkTrace struct {
+	mu sync.Mutex
+
 	// DNS timing
 	dnsStart time.Time
 	dnsDone  time.Time
@@ -64,9 +67,13 @@ type networkTrace struct {
 func createClientTrace(nt *networkTrace) *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		GetConn: func(_ string) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.getConnTime = time.Now()
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.gotConnTime = time.Now()
 			nt.connReused = info.Reused
 			nt.connIdle = info.WasIdle
@@ -80,9 +87,13 @@ func createClientTrace(nt *networkTrace) *httptrace.ClientTrace {
 			}
 		},
 		DNSStart: func(_ httptrace.DNSStartInfo) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.dnsStart = time.Now()
 		},
 		DNSDone: func(info httptrace.DNSDoneInfo) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.dnsDone = time.Now()
 			if info.Addrs != nil {
 				nt.dnsAddrs = make([]string, 0, len(info.Addrs))
@@ -92,22 +103,34 @@ func createClientTrace(nt *networkTrace) *httptrace.ClientTrace {
 			}
 		},
 		ConnectStart: func(_, _ string) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.connectStart = time.Now()
 		},
 		ConnectDone: func(_, _ string, _ error) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.connectDone = time.Now()
 		},
 		TLSHandshakeStart: func() {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.tlsStart = time.Now()
 		},
 		TLSHandshakeDone: func(state tls.ConnectionState, _ error) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.tlsDone = time.Now()
 			nt.protocolVer = state.NegotiatedProtocol
 		},
 		WroteRequest: func(_ httptrace.WroteRequestInfo) {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.wroteRequestTime = time.Now()
 		},
 		GotFirstResponseByte: func() {
+			nt.mu.Lock()
+			defer nt.mu.Unlock()
 			nt.firstResponseTime = time.Now()
 		},
 	}
@@ -115,6 +138,9 @@ func createClientTrace(nt *networkTrace) *httptrace.ClientTrace {
 
 // addTraceEvents adds span events for network timing.
 func (nt *networkTrace) addTraceEvents(span trace.Span) {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+
 	// DNS events
 	if !nt.dnsStart.IsZero() && !nt.dnsDone.IsZero() {
 		span.AddEvent("dns.start", trace.WithTimestamp(nt.dnsStart))
@@ -190,6 +216,9 @@ func (nt *networkTrace) recordTimingMetrics(
 	if m == nil {
 		return
 	}
+
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
 
 	// Track new connection opened (not reused from pool)
 	if !nt.connReused && !nt.connectStart.IsZero() {
