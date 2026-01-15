@@ -36,10 +36,23 @@ type RequestBuilder struct {
 	enableTrace         bool
 	hedgeConfig         *HedgeConfig
 	adaptiveHedgeConfig *AdaptiveHedgeConfig
+	coalesce            bool
+	timeout             time.Duration
+	rateLimitRPS        float64
+	requestInterceptors []RequestInterceptor
 
 	// Multipart upload fields
 	fileUploads []FileUpload
 	formFields  map[string]string
+}
+
+// bodyEncodingError is an io.Reader that returns an error.
+type bodyEncodingError struct {
+	err error
+}
+
+func (e *bodyEncodingError) Read(_ []byte) (int, error) {
+	return 0, e.err
 }
 
 // Path sets the request path.
@@ -521,6 +534,94 @@ func (rb *RequestBuilder) AdaptiveHedge(cfg AdaptiveHedgeConfig) *RequestBuilder
 	return rb
 }
 
+// Coalesce enables request coalescing (singleflight deduplication).
+//
+// When multiple goroutines make the same request simultaneously, only one
+// request is actually executed. Others wait and receive the same response.
+//
+// This is NOT caching: once a request completes, the next request with the
+// same key will make a fresh network call. There is no stale data problem.
+//
+// Key generation: SHA256(method + URL + sorted query params + body hash)
+//
+// Use for idempotent read operations to reduce downstream load during
+// concurrent access patterns (e.g., cache stampede).
+//
+// Example:
+//
+//	resp, err := client.Request("GetUser").
+//	    Coalesce().
+//	    Get(ctx, "/users/123")
+func (rb *RequestBuilder) Coalesce() *RequestBuilder {
+	rb.coalesce = true
+	return rb
+}
+
+// Timeout sets a per-request timeout that may override the client's default.
+//
+// The effective timeout is the MINIMUM of:
+//   - The context's deadline (if set)
+//   - The client's configured timeout
+//   - This per-request timeout
+//
+// This means a request timeout can only REDUCE the timeout, never extend it
+// beyond the client's configured limit or the context deadline.
+//
+// Example:
+//
+//	// Fast endpoint - use shorter timeout
+//	resp, err := client.Request("HealthCheck").
+//	    Timeout(1 * time.Second).
+//	    Get(ctx, "/health")
+//
+//	// Slow endpoint - use longer timeout (capped by client timeout if smaller)
+//	resp, err := client.Request("BulkExport").
+//	    Timeout(5 * time.Minute).
+//	    Get(ctx, "/exports/large")
+func (rb *RequestBuilder) Timeout(d time.Duration) *RequestBuilder {
+	rb.timeout = d
+	return rb
+}
+
+// RateLimit sets a per-request rate limit for this specific operation.
+//
+// This is useful when different endpoints have different throughput limits.
+// The rate limit is applied **in addition to** any client-level rate limit.
+//
+// Example - Limit bulk export to 10 req/s:
+//
+//	resp, err := client.Request("BulkExport").
+//	    RateLimit(10).
+//	    Get(ctx, "/exports")
+//
+// Example - High-throughput endpoint:
+//
+//	resp, err := client.Request("GetUser").
+//	    RateLimit(500).
+//	    Get(ctx, "/users/123")
+func (rb *RequestBuilder) RateLimit(requestsPerSecond float64) *RequestBuilder {
+	rb.rateLimitRPS = requestsPerSecond
+	return rb
+}
+
+// Intercept adds a request interceptor that runs before this specific request.
+//
+// Per-request interceptors run AFTER client-level interceptors.
+// Use this for request-specific transformations.
+//
+// Example - Add request-specific header:
+//
+//	resp, err := client.Request("AdminAction").
+//	    Intercept(func(req *http.Request) error {
+//	        req.Header.Set("X-Admin-Token", getAdminToken())
+//	        return nil
+//	    }).
+//	    Post(ctx, "/admin/action")
+func (rb *RequestBuilder) Intercept(i RequestInterceptor) *RequestBuilder {
+	rb.requestInterceptors = append(rb.requestInterceptors, i)
+	return rb
+}
+
 // Get executes a GET request.
 //
 // The path parameter is optional if already set via Path(). If provided,
@@ -648,6 +749,28 @@ func (rb *RequestBuilder) Delete(ctx context.Context, path ...string) (*Response
 
 // execute builds and sends the HTTP request.
 func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response, error) {
+	// Apply per-request timeout if set (shortest wins)
+	if rb.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rb.timeout)
+		defer cancel()
+	}
+
+	// Apply per-request rate limit if set
+	if rb.rateLimitRPS > 0 {
+		key := rb.operationName
+		if key == "" {
+			key = rb.path
+		}
+		if err := applyRequestRateLimit(ctx, key, RequestRateLimitConfig{
+			RequestsPerSecond: rb.rateLimitRPS,
+			Burst:             1,
+			WaitOnLimit:       true,
+		}); err != nil {
+			return nil, err
+		}
+	}
+
 	// Build URL
 	targetURL, err := rb.buildURL()
 	if err != nil {
@@ -671,8 +794,11 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		rb.contentType = contentType
 	}
 
-	// Read body for potential replay (needed for hedging)
-	if reqBody != nil && rb.hedgeConfig != nil && rb.hedgeConfig.Enabled() {
+	// Read body for potential replay (needed for hedging or coalescing)
+	needsBodyReplay := (rb.hedgeConfig != nil && rb.hedgeConfig.Enabled()) ||
+		(rb.adaptiveHedgeConfig != nil && rb.adaptiveHedgeConfig.Enabled()) ||
+		rb.coalesce
+	if reqBody != nil && needsBodyReplay {
 		bodyBytes, err = io.ReadAll(reqBody)
 		if err != nil {
 			return nil, err
@@ -703,6 +829,20 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		req.Header.Set("Content-Type", rb.contentType)
 	}
 
+	// Apply client-level request interceptors
+	if rb.client.config.Interceptors != nil {
+		if err := rb.client.config.Interceptors.ApplyRequestInterceptors(req); err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply per-request interceptors
+	for _, interceptor := range rb.requestInterceptors {
+		if err := interceptor(req); err != nil {
+			return nil, err
+		}
+	}
+
 	// Set up request tracing if enabled
 	var tracer *requestTracer
 	if rb.enableTrace || rb.client.enableTrace {
@@ -724,26 +864,59 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		endpoint = req.URL.Path
 	}
 
-	// Execute request (with or without hedging)
+	// Execute request (with or without hedging/coalescing)
 	var httpResp *http.Response
-	switch {
-	case rb.adaptiveHedgeConfig != nil && rb.adaptiveHedgeConfig.Enabled():
-		// Adaptive hedging: calculate delay from historical data
-		delay := rb.adaptiveHedgeConfig.GetDelay(endpoint)
-		hedgeCfg := &HedgeConfig{
-			Delay:     delay,
-			MaxHedges: rb.adaptiveHedgeConfig.MaxHedges,
+
+	// Define the actual request execution function
+	doRequest := func() (*http.Response, error) {
+		switch {
+		case rb.adaptiveHedgeConfig != nil && rb.adaptiveHedgeConfig.Enabled():
+			// Adaptive hedging: calculate delay from historical data
+			delay := rb.adaptiveHedgeConfig.GetDelay(endpoint)
+			hedgeCfg := &HedgeConfig{
+				Delay:     delay,
+				MaxHedges: rb.adaptiveHedgeConfig.MaxHedges,
+			}
+
+			return rb.executeWithHedgingConfig(ctx, req, bodyBytes, hedgeCfg)
+		case rb.hedgeConfig != nil && rb.hedgeConfig.Enabled():
+
+			return rb.executeWithHedging(ctx, req, bodyBytes)
+		default:
+
+			return rb.client.httpClient.Do(req)
 		}
-		//nolint:bodyclose // Caller closes via Response
-		httpResp, err = rb.executeWithHedgingConfig(ctx, req, bodyBytes, hedgeCfg)
-	case rb.hedgeConfig != nil && rb.hedgeConfig.Enabled():
-		//nolint:bodyclose // Caller closes via Response
-		httpResp, err = rb.executeWithHedging(ctx, req, bodyBytes)
-	default:
-		// The caller is responsible for closing the response body.
-		// Response.Body() handles this automatically when called.
-		//nolint:bodyclose // Caller closes via Response
-		httpResp, err = rb.client.httpClient.Do(req)
+	}
+
+	// Execute with or without coalescing
+	if rb.coalesce {
+		// Generate coalesce key
+		coalesceKey := GenerateCoalesceKey(method, targetURL, bodyBytes)
+
+		// Get client-specific singleflight group (use operationName as identifier)
+		clientID := rb.operationName
+		if clientID == "" {
+			clientID = "default"
+		}
+		group := clientCoalesceGroups.getOrCreateGroup(clientID)
+
+		// Execute via singleflight
+		//nolint:bodyclose // Response body is closed by caller via Response wrapper
+		result, err, _ := group.Do(coalesceKey, func() (any, error) {
+			resp, err := doRequest()
+			if err != nil {
+				return nil, err
+			}
+			return resp, nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+		httpResp = result.(*http.Response)
+	} else {
+		//nolint:bodyclose // Response body is closed by caller via Response wrapper
+		httpResp, err = doRequest()
 	}
 
 	duration := time.Since(startTime)
@@ -760,6 +933,13 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 	// Debug logging for response
 	if rb.client.debug {
 		logResponse(debugLogger, httpResp, duration)
+	}
+
+	// Apply client-level response interceptors
+	if rb.client.config.Interceptors != nil {
+		if err := rb.client.config.Interceptors.ApplyResponseInterceptors(httpResp, req); err != nil {
+			return nil, err
+		}
 	}
 
 	// Wrap response
@@ -908,13 +1088,4 @@ func (rb *RequestBuilder) buildURL() (string, error) {
 	}
 
 	return fullURL, nil
-}
-
-// bodyEncodingError is an io.Reader that returns an error.
-type bodyEncodingError struct {
-	err error
-}
-
-func (e *bodyEncodingError) Read(_ []byte) (int, error) {
-	return 0, e.err
 }

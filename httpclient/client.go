@@ -103,18 +103,33 @@ func (c *Client) Request(operationName string) *RequestBuilder {
 //	)
 func New(opts ...Option) *Client {
 	cfg := newConfig(opts...)
-	transport := cfg.buildTransport()
 
-	// Build transport chain: OTel -> Breaker -> Retry -> Chaos -> http.Transport
-	// Chaos is innermost so breaker and retry see the simulated failures.
-	// Note: Hedging is applied per-request via RequestBuilder.Hedge()
-	var chain http.RoundTripper = transport
-	if cfg.ChaosConfig != nil {
-		chain = newChaosTransport(chain, *cfg.ChaosConfig)
+	var chain http.RoundTripper
+
+	// If MockTransport is set, use it directly (for testing)
+	if cfg.MockTransport != nil {
+		chain = cfg.MockTransport
+	} else {
+		transport := cfg.buildTransport()
+
+		// Build transport chain: OTel -> Breaker -> RateLimit -> Retry -> Chaos -> http.Transport
+		// Order matters:
+		// - OTel: outermost to trace everything including retries
+		// - Breaker: fail fast before wasting rate limit tokens
+		// - RateLimit: throttle before retry attempts consume quota
+		// - Retry: retry transient failures from inner layers
+		// - Chaos: innermost so other layers see simulated failures
+		chain = transport
+		if cfg.ChaosConfig != nil {
+			chain = newChaosTransport(chain, *cfg.ChaosConfig)
+		}
+		chain = newRetryTransport(chain, cfg)
+		if cfg.RateLimitConfig != nil && cfg.RateLimitConfig.RequestsPerSecond > 0 {
+			chain = newRateLimitTransport(chain, *cfg.RateLimitConfig)
+		}
+		chain = newCircuitBreakerTransport(chain, cfg)
+		chain = newOtelTransport(chain, cfg)
 	}
-	chain = newRetryTransport(chain, cfg)
-	chain = newCircuitBreakerTransport(chain, cfg)
-	chain = newOtelTransport(chain, cfg)
 
 	httpClient := &http.Client{
 		Transport: chain,
