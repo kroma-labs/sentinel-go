@@ -8,6 +8,8 @@
 //   - Automatic retries with exponential backoff and jitter
 //   - Semantic retry classification (429, 502-504 → retry; 4xx → stop)
 //   - Circuit Breaker pattern (Local and Distributed Redis-backed)
+//   - Hedged Requests for tail latency optimization
+//   - Chaos Injection for resilience testing
 //   - Connection pooling with configurable limits
 //   - Network tracing (DNS, TLS, connect timing)
 //   - Request filtering for selective tracing
@@ -136,6 +138,74 @@
 //	    httpclient.WithServiceName("critical-service"),
 //	    httpclient.WithBreakerConfig(cfg),
 //	)
+//
+// # Chaos Injection (Testing)
+//
+// Simulate failures to test resilience patterns:
+//
+//	// Add latency to test timeout handling
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        LatencyMs:       200,  // 200ms delay
+//	        LatencyJitterMs: 100,  // 0-100ms additional jitter
+//	    }),
+//	)
+//
+//	// Inject errors to test circuit breaker
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        ErrorRate: 0.5, // 50% of requests fail
+//	    }),
+//	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+//	)
+//
+// WARNING: Do not use in production.
+//
+// # Hedged Requests (Tail Latency)
+//
+// Reduce tail latency by sending duplicate requests on slow responses.
+// Hedging is enabled per-request via the fluent builder:
+//
+//	// Simple: hedge after 50ms
+//	resp, err := client.Request("GetUser").
+//	    Hedge(50 * time.Millisecond).
+//	    Get(ctx, "/users/123")
+//
+//	// Advanced: custom config
+//	resp, err := client.Request("GetUser").
+//	    HedgeConfig(httpclient.HedgeConfig{
+//	        Delay:     50 * time.Millisecond,
+//	        MaxHedges: 2,
+//	    }).
+//	    Get(ctx, "/users/123")
+//
+// Based on Google's "The Tail at Scale" paper. First response wins,
+// remaining requests are cancelled.
+//
+// IMPORTANT: Only use for idempotent operations (GET, HEAD, etc.).
+//
+// # Adaptive Hedging
+//
+// Don't know your P95 latency? Use adaptive hedging to automatically
+// calculate the hedge delay based on historical endpoint latency:
+//
+//	// Adaptive: delay calculated from P95 of prior requests
+//	resp, err := client.Request("GetUser").
+//	    AdaptiveHedge(httpclient.DefaultAdaptiveHedgeConfig()).
+//	    Get(ctx, "/users/123")
+//
+//	// Custom adaptive config
+//	resp, err := client.Request("GetUser").
+//	    AdaptiveHedge(httpclient.AdaptiveHedgeConfig{
+//	        TargetPercentile: 0.99,     // P99 instead of P95
+//	        MinSamples:       20,       // Wait for 20 samples
+//	        FallbackDelay:    100 * time.Millisecond,
+//	        MaxHedges:        2,
+//	    }).
+//	    Get(ctx, "/users/123")
+//
+// The tracker records latencies per-endpoint (using operation name).
+// Until MinSamples is reached, FallbackDelay is used.
 //
 // # Observability
 //

@@ -549,6 +549,12 @@ type internalConfig struct {
 	// If nil, the circuit breaker is disabled.
 	BreakerConfig *BreakerConfig
 
+	// === Chaos Injection Configuration ===
+
+	// ChaosConfig holds the chaos injection configuration for testing.
+	// If nil, chaos injection is disabled.
+	ChaosConfig *ChaosConfig
+
 	// === Request Builder Configuration ===
 
 	// BaseURL is the base URL for all requests made via the Request builder.
@@ -1148,6 +1154,38 @@ func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
 func WithBreakerConfig(c BreakerConfig) Option {
 	return func(cfg *internalConfig) {
 		cfg.BreakerConfig = &c
+	}
+}
+
+// WithChaos enables chaos injection for testing resilience patterns.
+//
+// Chaos injection allows you to simulate failures in development/testing
+// environments to verify that retry logic, circuit breakers, and fallbacks
+// work correctly.
+//
+// WARNING: Do not use in production. This will intentionally degrade
+// service performance and reliability.
+//
+// Example - Simulate slow responses:
+//
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        LatencyMs:       200,  // Add 200ms delay
+//	        LatencyJitterMs: 100,  // Add 0-100ms jitter
+//	    }),
+//	)
+//
+// Example - Simulate failures to test circuit breaker:
+//
+//	client := httpclient.New(
+//	    httpclient.WithChaos(httpclient.ChaosConfig{
+//	        ErrorRate: 0.5, // 50% of requests fail
+//	    }),
+//	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
+//	)
+func WithChaos(c ChaosConfig) Option {
+	return func(cfg *internalConfig) {
+		cfg.ChaosConfig = &c
 	}
 }
 

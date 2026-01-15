@@ -105,12 +105,19 @@ func New(opts ...Option) *Client {
 	cfg := newConfig(opts...)
 	transport := cfg.buildTransport()
 
-	withRetry := newRetryTransport(transport, cfg)
-	withBreaker := newCircuitBreakerTransport(withRetry, cfg)
-	instrumented := newOtelTransport(withBreaker, cfg)
+	// Build transport chain: OTel -> Breaker -> Retry -> Chaos -> http.Transport
+	// Chaos is innermost so breaker and retry see the simulated failures.
+	// Note: Hedging is applied per-request via RequestBuilder.Hedge()
+	var chain http.RoundTripper = transport
+	if cfg.ChaosConfig != nil {
+		chain = newChaosTransport(chain, *cfg.ChaosConfig)
+	}
+	chain = newRetryTransport(chain, cfg)
+	chain = newCircuitBreakerTransport(chain, cfg)
+	chain = newOtelTransport(chain, cfg)
 
 	httpClient := &http.Client{
-		Transport: instrumented,
+		Transport: chain,
 		Timeout:   cfg.httpConfig.Timeout,
 	}
 
