@@ -14,7 +14,7 @@ import (
 
 // BenchmarkStandardClient measures the baseline performance of the standard http.Client.
 func BenchmarkStandardClient(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -39,7 +39,7 @@ func BenchmarkStandardClient(b *testing.B) {
 
 // BenchmarkSentinelClient_Default measures the performance of the Sentinel client with default configuration.
 func BenchmarkSentinelClient_Default(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -68,7 +68,7 @@ func BenchmarkSentinelClient_Default(b *testing.B) {
 
 // BenchmarkSentinelClient_WithBreaker measures overhead of the Circuit Breaker.
 func BenchmarkSentinelClient_WithBreaker(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -94,7 +94,7 @@ func BenchmarkSentinelClient_WithBreaker(b *testing.B) {
 
 // BenchmarkSentinelClient_WithRateLimit measures overhead of Rate Limiting.
 func BenchmarkSentinelClient_WithRateLimit(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -122,7 +122,7 @@ func BenchmarkSentinelClient_WithRateLimit(b *testing.B) {
 
 // BenchmarkSentinelClient_WithRetry measures overhead of Retry transport (success case).
 func BenchmarkSentinelClient_WithRetry(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -148,7 +148,7 @@ func BenchmarkSentinelClient_WithRetry(b *testing.B) {
 
 // BenchmarkSentinelClient_FullChain measures overhead of the full feature set.
 func BenchmarkSentinelClient_FullChain(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -178,7 +178,7 @@ func BenchmarkSentinelClient_FullChain(b *testing.B) {
 
 // BenchmarkSentinelClient_Coalescing measures request coalescing overhead/benefit.
 func BenchmarkSentinelClient_Coalescing(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -228,7 +228,7 @@ func BenchmarkBuilder_Allocation(b *testing.B) {
 
 // BenchmarkSentinelClient_WithInterceptors measures overhead of request/response interceptors.
 func BenchmarkSentinelClient_WithInterceptors(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
@@ -243,9 +243,9 @@ func BenchmarkSentinelClient_WithInterceptors(b *testing.B) {
 			},
 		),
 		WithResponseInterceptor(
-			func(resp *http.Response, req *http.Request) error {
+			func(resp *http.Response, _ *http.Request) error {
 				// Simulate some check
-				if resp.StatusCode != 200 {
+				if resp.StatusCode != http.StatusOK {
 					return nil
 				}
 				return nil
@@ -268,7 +268,7 @@ func BenchmarkSentinelClient_WithInterceptors(b *testing.B) {
 
 // BenchmarkSentinelClient_WithHedging measures overhead of adaptive hedging checks.
 func BenchmarkSentinelClient_WithHedging(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
@@ -294,7 +294,7 @@ func BenchmarkSentinelClient_WithHedging(b *testing.B) {
 
 // BenchmarkSentinelClient_ResponseDecoding measures JSON decoding convenience wrapper.
 func BenchmarkSentinelClient_ResponseDecoding(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		// Small JSON payload
 		_, _ = w.Write([]byte(`{"id": 123, "name": "benchmark", "active": true}`))
@@ -327,7 +327,7 @@ func BenchmarkSentinelClient_ResponseDecoding(b *testing.B) {
 // BenchmarkSentinelClient_KitchenSink measures the FULL feature set in a complex request.
 // Tracing + Metrics + Breaker + RateLimit + Retry + Hedging + Coalescing + Interceptors + Decoding.
 func BenchmarkSentinelClient_KitchenSink(b *testing.B) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
@@ -337,8 +337,8 @@ func BenchmarkSentinelClient_KitchenSink(b *testing.B) {
 		WithRetryConfig(DefaultRetryConfig()),
 		WithBreakerConfig(DefaultBreakerConfig()),
 		WithRateLimit(RateLimitConfig{RequestsPerSecond: float64(rate.Inf)}),
-		WithRequestInterceptor(func(req *http.Request) error { return nil }),
-		WithResponseInterceptor(func(resp *http.Response, req *http.Request) error { return nil }),
+		WithRequestInterceptor(func(_ *http.Request) error { return nil }),
+		WithResponseInterceptor(func(_ *http.Response, _ *http.Request) error { return nil }),
 	)
 	ctx := context.Background()
 	url := ts.URL
@@ -355,7 +355,8 @@ func BenchmarkSentinelClient_KitchenSink(b *testing.B) {
 		var res Response
 		// mimic a complex real-world call
 		_, err := client.Request("ComplexOp").
-			Path(url). // Use Path as absolute URL if it starts with http, or concat? Helper logic handles it?
+			Path(url).
+			// Use Path as absolute URL if it starts with http, or concat? Helper logic handles it?
 			// Wait, Request().Path() appends to BaseURL. If BaseURL is empty, it's just the path.
 			// Benchmark logic used Get(ctx, url) before.
 			// Let's use Get(ctx, url) and leave Path() for sub-resources if BaseURL was set.
@@ -380,7 +381,6 @@ func BenchmarkSentinelClient_KitchenSink(b *testing.B) {
 			EnableTrace(). // Enable detailed trace collection
 			Decode(&res).
 			Get(ctx, url)
-
 		if err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
