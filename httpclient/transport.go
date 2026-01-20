@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptrace"
@@ -121,6 +122,14 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.cfg.Metrics.recordError(ctx, errorType, baseAttrs)
 		t.cfg.Metrics.recordRequestDuration(ctx, duration, t.errorAttributes(req, errorType))
 		span.End() // End span immediately on error
+		return nil, err
+	}
+
+	// Guard against nil response with nil error (should not happen in valid Transport)
+	if resp == nil {
+		err = errors.New("transport returned nil response with nil error")
+		setSpanError(span, err, "internal_error")
+		span.End()
 		return nil, err
 	}
 

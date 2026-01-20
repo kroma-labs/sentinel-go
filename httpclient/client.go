@@ -103,14 +103,36 @@ func (c *Client) Request(operationName string) *RequestBuilder {
 //	)
 func New(opts ...Option) *Client {
 	cfg := newConfig(opts...)
-	transport := cfg.buildTransport()
 
-	withRetry := newRetryTransport(transport, cfg)
-	withBreaker := newCircuitBreakerTransport(withRetry, cfg)
-	instrumented := newOtelTransport(withBreaker, cfg)
+	var chain http.RoundTripper
+
+	// If MockTransport is set, use it directly (for testing)
+	if cfg.MockTransport != nil {
+		chain = cfg.MockTransport
+	} else {
+		transport := cfg.buildTransport()
+
+		// Build transport chain: OTel -> Breaker -> RateLimit -> Retry -> Chaos -> http.Transport
+		// Order matters:
+		// - OTel: outermost to trace everything including retries
+		// - Breaker: fail fast before wasting rate limit tokens
+		// - RateLimit: throttle before retry attempts consume quota
+		// - Retry: retry transient failures from inner layers
+		// - Chaos: innermost so other layers see simulated failures
+		chain = transport
+		if cfg.ChaosConfig != nil {
+			chain = newChaosTransport(chain, *cfg.ChaosConfig)
+		}
+		chain = newRetryTransport(chain, cfg)
+		if cfg.RateLimitConfig != nil && cfg.RateLimitConfig.RequestsPerSecond > 0 {
+			chain = newRateLimitTransport(chain, *cfg.RateLimitConfig)
+		}
+		chain = newCircuitBreakerTransport(chain, cfg)
+		chain = newOtelTransport(chain, cfg)
+	}
 
 	httpClient := &http.Client{
-		Transport: instrumented,
+		Transport: chain,
 		Timeout:   cfg.httpConfig.Timeout,
 	}
 
