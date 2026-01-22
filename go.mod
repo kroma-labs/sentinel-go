@@ -8,7 +8,6 @@ require (
 	github.com/boumenot/gocover-cobertura v1.4.0
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/gin-gonic/gin v1.11.0
-	github.com/go-chi/chi/v5 v5.2.4
 	github.com/goccy/go-json v0.10.5
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/google/uuid v1.6.0

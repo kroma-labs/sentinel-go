@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	json "github.com/goccy/go-json"
+	"github.com/rs/zerolog/log"
 )
 
 // Response is a generic wrapper for all API responses.
@@ -40,6 +41,9 @@ type Error struct {
 
 // WriteJSON writes a JSON response with the given status code.
 //
+// If JSON encoding fails, the error is logged but not returned since
+// HTTP headers have already been written at that point.
+//
 // Example:
 //
 //	type UserData struct {
@@ -54,7 +58,14 @@ type Error struct {
 func WriteJSON[T any](w http.ResponseWriter, statusCode int, response Response[T]) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(response)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		// Log encoding error - we can't send a new HTTP error since headers are already written
+		log.Error().
+			Err(err).
+			Int("status_code", statusCode).
+			Msg("failed to encode JSON response")
+	}
 }
 
 // WriteError writes a JSON error response.

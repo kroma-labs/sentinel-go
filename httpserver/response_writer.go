@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"net/http"
 )
@@ -12,6 +13,10 @@ type responseWriter struct {
 	status       int
 	bytesWritten int
 	wroteHeader  bool
+
+	// For body logging (optional)
+	bodyBuffer  *bytes.Buffer
+	maxBodySize int
 }
 
 // wrapResponseWriter creates a new responseWriter.
@@ -32,10 +37,22 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // Write captures bytes written and ensures header is written.
+// If bodyBuffer is set, it also captures the response body up to maxBodySize.
 func (rw *responseWriter) Write(b []byte) (int, error) {
 	if !rw.wroteHeader {
 		rw.WriteHeader(http.StatusOK)
 	}
+
+	// Capture body for logging if enabled
+	if rw.bodyBuffer != nil && rw.bodyBuffer.Len() < rw.maxBodySize {
+		remaining := rw.maxBodySize - rw.bodyBuffer.Len()
+		if len(b) <= remaining {
+			rw.bodyBuffer.Write(b)
+		} else {
+			rw.bodyBuffer.Write(b[:remaining])
+		}
+	}
+
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytesWritten += n
 	return n, err
