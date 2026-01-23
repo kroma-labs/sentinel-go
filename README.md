@@ -64,7 +64,6 @@ client := httpclient.New(
   - [SQL/SQLX Options](#sqlsqlx-options)
 - [Observability](#observability)
   - [Metrics Emitted](#metrics-emitted)
-  - [Metrics Emitted](#metrics-emitted-1)
   - [Trace Attributes](#trace-attributes)
 - [Roadmap](#roadmap)
 - [Performance](#performance)
@@ -287,8 +286,6 @@ client := httpclient.New(
 
 ### Metrics Emitted
 
-### Metrics Emitted
-
 **HTTP Client:**
 
 | Metric                                 | Type      | Description                  |
@@ -299,11 +296,11 @@ client := httpclient.New(
 
 **SQL/SQLX:**
 
-| Metric                       | Type      | Description      |
-| :--------------------------- | :-------- | :--------------- |
-| `db.client.query.duration`   | Histogram | Query latency    |
-| `db.client.connections.open` | Gauge     | Open connections |
-| `db.client.connections.idle` | Gauge     | Idle connections |
+| Metric                         | Type      | Description            |
+| :----------------------------- | :-------- | :--------------------- |
+| `db.client.operation.duration` | Histogram | Query latency          |
+| `db.client.connection.count`   | Gauge     | Connections (by state) |
+| `db.client.connection.max`     | Gauge     | Max connections        |
 
 ### Trace Attributes
 
@@ -333,7 +330,7 @@ All spans include semantic convention attributes:
 
 Sentinel-Go is designed for high-performance production environments. We benchmark properly to ensure minimal overhead.
 
-**Benchmark Results (M4 Pro):**
+**Benchmark Results:**
 
 | Scenario                   | Time/Op | Alloc/Op | Notes                           |
 | -------------------------- | ------- | -------- | ------------------------------- |

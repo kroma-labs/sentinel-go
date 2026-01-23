@@ -7,6 +7,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/boumenot/gocover-cobertura v1.4.0
 	github.com/cenkalti/backoff/v5 v5.0.3
+	github.com/dustin/go-humanize v1.0.1
 	github.com/gin-gonic/gin v1.11.0
 	github.com/goccy/go-json v0.10.5
 	github.com/gofiber/fiber/v2 v2.52.10

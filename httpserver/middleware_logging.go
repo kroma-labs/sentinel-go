@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/rs/zerolog"
 )
 
@@ -110,15 +111,19 @@ func Logger(cfg LoggerConfig) Middleware {
 				event = cfg.Logger.Error()
 			}
 
+			// Format bytes using go-humanize
+			bytesWritten := uint64(wrapped.BytesWritten())
+			bytesStr := humanize.Bytes(bytesWritten)
+
 			event.
 				Str("service", cfg.serviceName).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
-				Int("status", wrapped.Status()).
-				Dur("duration", duration).
-				Int("bytes", wrapped.BytesWritten()).
+				Str("duration", duration.String()).
 				Str("remote_addr", r.RemoteAddr).
-				Str("user_agent", r.UserAgent())
+				Str("user_agent", r.UserAgent()).
+				Int("status", wrapped.Status()).
+				Str("bytes", bytesStr)
 
 			if requestID != "" {
 				event.Str("request_id", requestID)

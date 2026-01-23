@@ -74,6 +74,15 @@ func New(opts ...Option) *Server {
 	// Build middleware stack, injecting ServiceName automatically
 	var middlewares []Middleware
 
+	// Add user-provided middleware FIRST.
+	// This ensures that fundamental middleware like Recovery and RequestID are:
+	// 1. Outermost in the stack (run first on request, last on response)
+	// 2. Available to inner middleware like Logging and Tracing
+	//
+	// For example, if user adds RequestID here, it runs first, sets the ID in context,
+	// and then Logging (added below) can see that ID.
+	middlewares = append(middlewares, cfg.Middleware...)
+
 	// Add tracing if configured
 	if cfg.TracingConfig != nil {
 		tracingCfg := *cfg.TracingConfig
@@ -110,9 +119,6 @@ func New(opts ...Option) *Server {
 			WithVersion(cfg.HealthVersion),
 		)
 	}
-
-	// Add user-provided middleware
-	middlewares = append(middlewares, cfg.Middleware...)
 
 	// Wrap handler with middleware
 	handler := cfg.Handler

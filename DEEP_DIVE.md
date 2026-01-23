@@ -31,7 +31,7 @@ A comprehensive technical guide to all packages in Sentinel-Go.
 15. [Chaos Injection](#chaos-injection)
 16. [Request Coalescing](#request-coalescing)
 17. [Rate Limiting](#rate-limiting)
-18. [Request/Response Interceptors](#requestresponse-interceptors)
+18. [Interceptors](#interceptors)
 19. [Mock Transport](#mock-transport)
 20. [Observability](#observability)
 
@@ -265,11 +265,11 @@ This enables metrics like "SELECT queries P95 latency" vs "INSERT queries P95 la
 
 ### Metrics Emitted
 
-| Metric                       | Type      | Labels                     | Purpose                    |
-| ---------------------------- | --------- | -------------------------- | -------------------------- |
-| `db.client.query.duration`   | Histogram | operation, db.name, status | Query latency distribution |
-| `db.client.connections.open` | Gauge     | db.name                    | Current open connections   |
-| `db.client.connections.max`  | Gauge     | db.name                    | Max pool size              |
+| Metric                         | Type      | Labels                     | Purpose                    |
+| ------------------------------ | --------- | -------------------------- | -------------------------- |
+| `db.client.operation.duration` | Histogram | operation, db.name, status | Query latency distribution |
+| `db.client.connection.count`   | Gauge     | db.name                    | Current connections        |
+| `db.client.connection.max`     | Gauge     | db.name                    | Max pool size              |
 
 ---
 
@@ -1764,7 +1764,7 @@ Logging request details or capturing custom metrics before/after execution.
 
 ---
 
-## Testing with Mock Transport
+## Mock Transport
 
 Testing code that depends on `http.Client` is often painful. You either mock the entire client interface (losing the benefit of testing your client configuration) or spin up a real HTTP server (slow, flaky).
 

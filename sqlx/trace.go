@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 // Regex patterns for query sanitization - pre-compiled for performance.
@@ -64,10 +65,10 @@ func sqlxSpanName(method, query string) string {
 func (cfg *config) baseAttributes() []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 3)
 	if cfg.DBSystem != "" {
-		attrs = append(attrs, attribute.String("db.system", cfg.DBSystem))
+		attrs = append(attrs, semconv.DBSystemKey.String(cfg.DBSystem))
 	}
 	if cfg.DBName != "" {
-		attrs = append(attrs, attribute.String("db.name", cfg.DBName))
+		attrs = append(attrs, semconv.DBNameKey.String(cfg.DBName))
 	}
 	if cfg.InstanceName != "" {
 		attrs = append(attrs, attribute.String("db.instance", cfg.InstanceName))
@@ -84,12 +85,12 @@ func (cfg *config) queryAttributes(query string) []attribute.KeyValue {
 		if cfg.QuerySanitizer != nil {
 			sanitized = cfg.QuerySanitizer(query)
 		}
-		attrs = append(attrs, attribute.String("db.statement", sanitized))
+		attrs = append(attrs, semconv.DBStatementKey.String(sanitized))
 	}
 
 	op := extractOperation(query)
 	if op != "" {
-		attrs = append(attrs, attribute.String("db.operation", op))
+		attrs = append(attrs, semconv.DBOperationKey.String(op))
 	}
 
 	return attrs
