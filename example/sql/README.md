@@ -146,12 +146,11 @@ histogram_quantile(0.95, rate(db_client_operation_duration_bucket[1m]))
 **Connection Pool Metrics:**
 
 ```promql
-# Open connections
-db_client_connections_open
+# Connection count
+db_client_connection_count
 
-# Idle vs In-Use
-db_client_connections_idle
-db_client_connections_used
+# Max connections
+db_client_connection_max
 
 # Wait statistics
 rate(db_client_connections_wait_count[1m])
@@ -228,10 +227,8 @@ Press `Ctrl+C` to cleanly shutdown:
 | Metric Name                           | Type      | Description                 | Labels                                           |
 | ------------------------------------- | --------- | --------------------------- | ------------------------------------------------ |
 | `db_client_operation_duration`        | Histogram | Query latency in seconds    | `db.system`, `db.name`, `db.operation`, `status` |
-| `db_client_connections_open`          | Gauge     | Total open connections      | `db.system`, `db.name`                           |
-| `db_client_connections_idle`          | Gauge     | Idle connections            | `db.system`, `db.name`                           |
-| `db_client_connections_used`          | Gauge     | Connections in use          | `db.system`, `db.name`                           |
-| `db_client_connections_max`           | Gauge     | Max connection limit        | `db.system`, `db.name`                           |
+| `db_client_connection_count`          | Gauge     | Total connections           | `db.system`, `db.name`                           |
+| `db_client_connection_max`            | Gauge     | Max connection limit        | `db.system`, `db.name`                           |
 | `db_client_connections_wait_count`    | Counter   | Times waited for connection | `db.system`, `db.name`                           |
 | `db_client_connections_wait_duration` | Counter   | Total wait time (seconds)   | `db.system`, `db.name`                           |
 
