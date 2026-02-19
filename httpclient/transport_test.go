@@ -77,7 +77,7 @@ func TestOtelTransport_RoundTrip(t *testing.T) {
 			defer tp.Shutdown(context.Background())
 			defer mp.Shutdown(context.Background())
 
-			cfg := &internalConfig{
+			cfg := &clientConfig{
 				httpConfig:         DefaultConfig(),
 				TracerProvider:     tp,
 				MeterProvider:      mp,
@@ -133,7 +133,7 @@ func TestOtelTransport_RoundTrip_TracePropagation(t *testing.T) {
 		defer tp.Shutdown(context.Background())
 		defer mp.Shutdown(context.Background())
 
-		cfg := &internalConfig{
+		cfg := &clientConfig{
 			httpConfig:         DefaultConfig(),
 			TracerProvider:     tp,
 			MeterProvider:      mp,
@@ -192,7 +192,7 @@ func TestOtelTransport_RoundTrip_ErrorHandling(t *testing.T) {
 			tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 			defer tp.Shutdown(context.Background())
 
-			cfg := &internalConfig{
+			cfg := &clientConfig{
 				httpConfig:         DefaultConfig(),
 				TracerProvider:     tp,
 				MeterProvider:      mp,
@@ -281,7 +281,7 @@ func TestOtelTransport_RequestAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &internalConfig{ServiceName: tt.args.serviceName}
+			cfg := &clientConfig{ServiceName: tt.args.serviceName}
 			transport := &otelTransport{cfg: cfg}
 
 			req, _ := http.NewRequest(tt.args.method, tt.args.url, nil)
@@ -343,7 +343,7 @@ func TestOtelTransport_ResponseAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			transport := &otelTransport{cfg: &internalConfig{}}
+			transport := &otelTransport{cfg: &clientConfig{}}
 			resp := &http.Response{
 				StatusCode:    tt.args.statusCode,
 				ContentLength: tt.args.contentLength,
@@ -376,7 +376,7 @@ func TestOtelTransport_MetricsRecording(t *testing.T) {
 		defer mp.Shutdown(context.Background())
 		defer tp.Shutdown(context.Background())
 
-		cfg := &internalConfig{
+		cfg := &clientConfig{
 			httpConfig:         DefaultConfig(),
 			TracerProvider:     tp,
 			MeterProvider:      mp,

@@ -20,12 +20,12 @@ var _ http.RoundTripper = (*otelTransport)(nil)
 // otelTransport wraps an http.RoundTripper with OpenTelemetry instrumentation.
 type otelTransport struct {
 	base       http.RoundTripper
-	cfg        *internalConfig
+	cfg        *clientConfig
 	propagator propagation.TextMapPropagator
 }
 
 // newOtelTransport creates a new instrumented transport.
-func newOtelTransport(base http.RoundTripper, cfg *internalConfig) *otelTransport {
+func newOtelTransport(base http.RoundTripper, cfg *clientConfig) *otelTransport {
 	// Use custom propagators if configured, otherwise default to W3C TraceContext + Baggage
 	propagator := cfg.Propagators
 	if propagator == nil {
@@ -79,13 +79,13 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	// Track active requests
-	baseAttrs := t.cfg.baseAttributes()
-	t.cfg.Metrics.recordActiveRequestStart(ctx, baseAttrs)
-	defer t.cfg.Metrics.recordActiveRequestEnd(ctx, baseAttrs)
+	reqAttrs := t.commonAttributes(req)
+	t.cfg.Metrics.recordActiveRequestStart(ctx, reqAttrs)
+	defer t.cfg.Metrics.recordActiveRequestEnd(ctx, reqAttrs)
 
 	// Record request body size if known
 	if req.ContentLength > 0 {
-		t.cfg.Metrics.recordRequestBodySize(ctx, req.ContentLength, baseAttrs)
+		t.cfg.Metrics.recordRequestBodySize(ctx, req.ContentLength, reqAttrs)
 	}
 
 	// Setup network tracing
@@ -112,14 +112,14 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Record network trace events and metrics
 	if nt != nil {
 		nt.addTraceEvents(span)
-		nt.recordTimingMetrics(ctx, t.cfg.Metrics, baseAttrs)
+		nt.recordTimingMetrics(ctx, t.cfg.Metrics, reqAttrs)
 	}
 
 	// Handle errors - end span immediately on transport failure
 	if err != nil {
 		errorType := classifyError(err)
 		setSpanError(span, err, errorType)
-		t.cfg.Metrics.recordError(ctx, errorType, baseAttrs)
+		t.cfg.Metrics.recordError(ctx, errorType, reqAttrs)
 		t.cfg.Metrics.recordRequestDuration(ctx, duration, t.errorAttributes(req, errorType))
 		span.End() // End span immediately on error
 		return nil, err
@@ -143,9 +143,12 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		span.SetAttributes(attribute.String("error.type", errorType))
 	}
 
+	// Capture start of content transfer (approximate)
+	transferStart := time.Now()
+
 	// Record response body size if known
 	if resp.ContentLength > 0 {
-		t.cfg.Metrics.recordResponseBodySize(ctx, resp.ContentLength, baseAttrs)
+		t.cfg.Metrics.recordResponseBodySize(ctx, resp.ContentLength, reqAttrs)
 	}
 
 	// Record request duration with response attributes
@@ -160,12 +163,15 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body = newWrappedBody(span, resp.Body, func(bytesRead int64) {
 			// Record actual response body size if it differs from Content-Length
 			if resp.ContentLength <= 0 && bytesRead > 0 {
-				t.cfg.Metrics.recordResponseBodySize(ctx, bytesRead, baseAttrs)
+				t.cfg.Metrics.recordResponseBodySize(ctx, bytesRead, reqAttrs)
 			}
+
+			// Record content transfer duration
+			t.cfg.Metrics.recordContentTransferDuration(ctx, time.Since(transferStart), reqAttrs)
 
 			// Decrement open connections counter when request using new connection completes
 			if wasNewConnection {
-				t.cfg.Metrics.recordConnectionClosed(ctx, baseAttrs)
+				t.cfg.Metrics.recordConnectionClosed(ctx, reqAttrs)
 			}
 		})
 	} else {
@@ -174,15 +180,15 @@ func (t *otelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		// Still need to track connection closure for bodyless responses
 		if nt != nil && !nt.connReused && !nt.connectStart.IsZero() {
-			t.cfg.Metrics.recordConnectionClosed(ctx, baseAttrs)
+			t.cfg.Metrics.recordConnectionClosed(ctx, reqAttrs)
 		}
 	}
 
 	return resp, nil
 }
 
-// requestAttributes returns span attributes for the request.
-func (t *otelTransport) requestAttributes(req *http.Request) []attribute.KeyValue {
+// commonAttributes returns attributes common to both spans and metrics.
+func (t *otelTransport) commonAttributes(req *http.Request) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 10)
 
 	// Add base attributes (service name)
@@ -190,6 +196,11 @@ func (t *otelTransport) requestAttributes(req *http.Request) []attribute.KeyValu
 
 	// HTTP method (required)
 	attrs = append(attrs, attribute.String("http.request.method", req.Method))
+
+	// HTTP Route (if available)
+	if route := routeFromContext(req.Context()); route != "" {
+		attrs = append(attrs, attribute.String("http.route", route))
+	}
 
 	// URL components
 	if req.URL != nil {
@@ -218,14 +229,23 @@ func (t *otelTransport) requestAttributes(req *http.Request) []attribute.KeyValu
 		}
 	}
 
+	return attrs
+}
+
+// requestAttributes returns span attributes for the request.
+func (t *otelTransport) requestAttributes(req *http.Request) []attribute.KeyValue {
+	attrs := t.commonAttributes(req)
+
+	// Users might want to add more specific request attributes for spans only here
+	// e.g. user_agent is good for spans but maybe high cardinality for metrics?
+	// OTel semantic conventions say user_agent.original is recommended for metrics too.
+	if ua := req.UserAgent(); ua != "" {
+		attrs = append(attrs, attribute.String("user_agent.original", ua))
+	}
+
 	// Request body size
 	if req.ContentLength > 0 {
 		attrs = append(attrs, attribute.Int64("http.request.body.size", req.ContentLength))
-	}
-
-	// User agent
-	if ua := req.UserAgent(); ua != "" {
-		attrs = append(attrs, attribute.String("user_agent.original", ua))
 	}
 
 	return attrs
@@ -264,35 +284,8 @@ func (t *otelTransport) metricsAttributes(
 	req *http.Request,
 	resp *http.Response,
 ) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 5)
-
-	// Add base attributes
-	attrs = append(attrs, t.cfg.baseAttributes()...)
-
-	// HTTP method (required per semconv)
-	attrs = append(attrs, attribute.String("http.request.method", req.Method))
-
-	// Server address and port (required per semconv)
-	if req.URL != nil {
-		host := req.URL.Hostname()
-		if host != "" {
-			attrs = append(attrs, attribute.String("server.address", host))
-		}
-
-		port := req.URL.Port()
-		if port != "" {
-			if p, err := strconv.Atoi(port); err == nil {
-				attrs = append(attrs, attribute.Int("server.port", p))
-			}
-		} else {
-			switch req.URL.Scheme {
-			case "http":
-				attrs = append(attrs, attribute.Int("server.port", 80))
-			case "https":
-				attrs = append(attrs, attribute.Int("server.port", 443))
-			}
-		}
-	}
+	// Start with common attributes (method, url, route, server, etc.)
+	attrs := t.commonAttributes(req)
 
 	// Response status code (required when available)
 	if resp != nil {
@@ -309,28 +302,8 @@ func (t *otelTransport) metricsAttributes(
 
 // errorAttributes returns attributes for error metrics.
 func (t *otelTransport) errorAttributes(req *http.Request, errorType string) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 5)
-
-	// Add base attributes
-	attrs = append(attrs, t.cfg.baseAttributes()...)
-
-	// HTTP method
-	attrs = append(attrs, attribute.String("http.request.method", req.Method))
-
-	// Server address and port
-	if req.URL != nil {
-		host := req.URL.Hostname()
-		if host != "" {
-			attrs = append(attrs, attribute.String("server.address", host))
-		}
-
-		port := req.URL.Port()
-		if port != "" {
-			if p, err := strconv.Atoi(port); err == nil {
-				attrs = append(attrs, attribute.Int("server.port", p))
-			}
-		}
-	}
+	// Start with common attributes
+	attrs := t.commonAttributes(req)
 
 	// Error type
 	if errorType != "" {

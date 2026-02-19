@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 func TestNewMetrics(t *testing.T) {
@@ -36,11 +37,20 @@ func TestNewMetrics(t *testing.T) {
 			assert.NotNil(t, m.requestDuration)
 			assert.NotNil(t, m.requestBodySize)
 			assert.NotNil(t, m.responseBodySize)
+			assert.NotNil(t, m.openConnections)
+			assert.NotNil(t, m.connectionDuration)
 			assert.NotNil(t, m.dnsDuration)
 			assert.NotNil(t, m.tlsDuration)
 			assert.NotNil(t, m.ttfb)
+			assert.NotNil(t, m.contentTransferDuration)
 			assert.NotNil(t, m.activeRequests)
 			assert.NotNil(t, m.requestErrors)
+			assert.NotNil(t, m.retryAttempts)
+			assert.NotNil(t, m.retryExhausted)
+			assert.NotNil(t, m.retryDuration)
+			assert.NotNil(t, m.breakerState)
+			assert.NotNil(t, m.breakerRequests)
+			assert.NotNil(t, m.circuitBreakerDuration)
 		})
 	}
 }
@@ -61,7 +71,7 @@ func TestRecordRequestDuration(t *testing.T) {
 			args: args{
 				duration: 100 * time.Millisecond,
 				attrs: []attribute.KeyValue{
-					attribute.String("http.request.method", "GET"),
+					semconv.HTTPRequestMethodKey.String("GET"),
 				},
 			},
 			wantMetrics: true,
@@ -244,7 +254,7 @@ func TestRecordError(t *testing.T) {
 			name: "given error type, then records with attribute",
 			args: args{
 				errorType: "timeout",
-				attrs:     []attribute.KeyValue{attribute.String("server.address", "example.com")},
+				attrs:     []attribute.KeyValue{semconv.ServerAddressKey.String("example.com")},
 			},
 		},
 		{
@@ -362,5 +372,25 @@ func TestMetricsNilHistogramSafety(t *testing.T) {
 			m.recordActiveRequestEnd(ctx, nil)
 			m.recordError(ctx, "test", nil)
 		})
+	})
+}
+
+func TestRecordBreakerDuration(t *testing.T) {
+	t.Run("given duration, then records metric", func(t *testing.T) {
+		reader := sdkmetric.NewManualReader()
+		mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+		defer mp.Shutdown(context.Background())
+
+		meter := mp.Meter("test")
+		m, err := newMetrics(meter)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		m.recordBreakerDuration(ctx, 100*time.Millisecond, nil)
+
+		var rm metricdata.ResourceMetrics
+		err = reader.Collect(ctx, &rm)
+		require.NoError(t, err)
+		assert.NotEmpty(t, rm.ScopeMetrics)
 	})
 }

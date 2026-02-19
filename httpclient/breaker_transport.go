@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/sony/gobreaker/v2"
 )
@@ -13,7 +14,7 @@ type circuitBreakerTransport struct {
 	breaker    CircuitBreaker
 	next       http.RoundTripper
 	classifier BreakerClassifier
-	cfg        *internalConfig
+	cfg        *clientConfig
 	name       string
 }
 
@@ -26,6 +27,7 @@ var errSyntheticFailure = errors.New("synthetic failure")
 func (t *circuitBreakerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
+	start := time.Now()
 	res, err := t.breaker.Execute(func() (interface{}, error) {
 		resp, err := t.next.RoundTrip(req) //nolint:bodyclose
 
@@ -38,13 +40,28 @@ func (t *circuitBreakerTransport) RoundTrip(req *http.Request) (*http.Response, 
 
 		return resp, nil
 	})
+	duration := time.Since(start)
+
+	reqAttrs := requestAttributes(req)
+	t.cfg.Metrics.recordBreakerDuration(ctx, duration, append(t.cfg.baseAttributes(), reqAttrs...))
+
 	if err != nil {
 		// Differentiate between "Circuit Open" rejection and "Actual Failure"
 		if errors.Is(err, gobreaker.ErrOpenState) {
-			t.cfg.Metrics.recordBreakerRequest(ctx, t.name, "rejected")
+			t.cfg.Metrics.recordBreakerRequest(
+				ctx,
+				t.name,
+				"rejected",
+				append(t.cfg.baseAttributes(), reqAttrs...),
+			)
 		} else {
 			// This is a failure that passed through the breaker but failed execution
-			t.cfg.Metrics.recordBreakerRequest(ctx, t.name, "failure")
+			t.cfg.Metrics.recordBreakerRequest(
+				ctx,
+				t.name,
+				"failure",
+				append(t.cfg.baseAttributes(), reqAttrs...),
+			)
 		}
 
 		// Unwrap synthetic failure
@@ -57,7 +74,12 @@ func (t *circuitBreakerTransport) RoundTrip(req *http.Request) (*http.Response, 
 		return nil, err
 	}
 
-	t.cfg.Metrics.recordBreakerRequest(ctx, t.name, "success")
+	t.cfg.Metrics.recordBreakerRequest(
+		ctx,
+		t.name,
+		"success",
+		append(t.cfg.baseAttributes(), reqAttrs...),
+	)
 
 	if resp, ok := res.(*http.Response); ok {
 		return resp, nil
@@ -67,7 +89,7 @@ func (t *circuitBreakerTransport) RoundTrip(req *http.Request) (*http.Response, 
 }
 
 // newCircuitBreakerTransport creates a new circuit breaker transport.
-func newCircuitBreakerTransport(next http.RoundTripper, cfg *internalConfig) http.RoundTripper {
+func newCircuitBreakerTransport(next http.RoundTripper, cfg *clientConfig) http.RoundTripper {
 	if cfg.BreakerConfig == nil {
 		return next
 	}
@@ -103,7 +125,7 @@ func newCircuitBreakerTransport(next http.RoundTripper, cfg *internalConfig) htt
 		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
 			if cfg.Metrics != nil {
-				cfg.Metrics.recordBreakerState(context.Background(), name, int64(to))
+				cfg.Metrics.recordBreakerState(context.Background(), name, int64(to), cfg.baseAttributes())
 			}
 			if cfg.BreakerConfig.OnStateChange != nil {
 				cfg.BreakerConfig.OnStateChange(name, from, to)
@@ -137,10 +159,15 @@ func newCircuitBreakerTransport(next http.RoundTripper, cfg *internalConfig) htt
 		cb = gobreaker.NewCircuitBreaker[interface{}](st)
 	}
 
+	classifier := cfg.BreakerConfig.Classifier
+	if classifier == nil {
+		classifier = DefaultBreakerClassifier
+	}
+
 	return &circuitBreakerTransport{
 		breaker:    cb,
 		next:       next,
-		classifier: cfg.BreakerConfig.Classifier,
+		classifier: classifier,
 		cfg:        cfg,
 		name:       name,
 	}

@@ -11,6 +11,10 @@ import (
 
 // MockTransport provides a configurable http.RoundTripper for testing.
 // It allows stubbing responses and verifying request expectations.
+//
+// MockTransport is safe for concurrent use. All stub configuration,
+// request recording, and response matching are serialized via an
+// internal RWMutex.
 type MockTransport struct {
 	mu          sync.RWMutex
 	stubs       []stub
@@ -209,7 +213,7 @@ func cloneResponse(resp *http.Response) *http.Response {
 
 // WithMockTransport is a convenience function to create a client with a mock transport.
 func WithMockTransport(mock *MockTransport) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.MockTransport = mock
 	}
 }

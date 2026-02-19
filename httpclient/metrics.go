@@ -6,6 +6,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 // metrics holds the metric instruments for HTTP client operations.
@@ -77,6 +78,9 @@ type metrics struct {
 	// breakerRequests counts circuit breaker requests by result.
 	// result tag: success, failure, rejected
 	breakerRequests metric.Int64Counter
+
+	// circuitBreakerDuration measures the time taken by the circuit breaker logic (execution).
+	circuitBreakerDuration metric.Float64Histogram
 }
 
 // newMetrics creates and registers metric instruments.
@@ -272,6 +276,19 @@ func newMetrics(meter metric.Meter) (*metrics, error) {
 		return nil, err
 	}
 
+	// Circuit breaker duration histogram
+	m.circuitBreakerDuration, err = meter.Float64Histogram(
+		"http.client.circuit_breaker.duration",
+		metric.WithDescription("Duration of circuit breaker execution in seconds"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(
+			0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return m, nil
 }
 
@@ -285,6 +302,18 @@ func (m *metrics) recordRequestDuration(
 		return
 	}
 	m.requestDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+}
+
+// recordContentTransferDuration records the response body download duration.
+func (m *metrics) recordContentTransferDuration(
+	ctx context.Context,
+	duration time.Duration,
+	attrs []attribute.KeyValue,
+) {
+	if m == nil || m.contentTransferDuration == nil {
+		return
+	}
+	m.contentTransferDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
 // recordRequestBodySize records the size of a request body.
@@ -398,7 +427,7 @@ func (m *metrics) recordError(ctx context.Context, errorType string, attrs []att
 	}
 	allAttrs := make([]attribute.KeyValue, 0, len(attrs)+1)
 	allAttrs = append(allAttrs, attrs...)
-	allAttrs = append(allAttrs, attribute.String("error.type", errorType))
+	allAttrs = append(allAttrs, semconv.ExceptionTypeKey.String(errorType))
 	m.requestErrors.Add(ctx, 1, metric.WithAttributes(allAttrs...))
 }
 
@@ -434,22 +463,49 @@ func (m *metrics) recordRetryDuration(
 }
 
 // recordBreakerState records the current state of the circuit breaker.
-func (m *metrics) recordBreakerState(ctx context.Context, name string, state int64) {
+func (m *metrics) recordBreakerState(
+	ctx context.Context,
+	name string,
+	state int64,
+	attrs []attribute.KeyValue,
+) {
 	if m == nil || m.breakerState == nil {
 		return
 	}
-	m.breakerState.Record(ctx, state, metric.WithAttributes(
-		attribute.String("breaker.name", name),
-	))
+	allAttrs := make([]attribute.KeyValue, 0, len(attrs)+1)
+	allAttrs = append(allAttrs, attrs...)
+	allAttrs = append(allAttrs, attribute.String("breaker.name", name))
+
+	m.breakerState.Record(ctx, state, metric.WithAttributes(allAttrs...))
 }
 
 // recordBreakerRequest records a circuit breaker request execution.
-func (m *metrics) recordBreakerRequest(ctx context.Context, name string, result string) {
+func (m *metrics) recordBreakerRequest(
+	ctx context.Context,
+	name string,
+	result string,
+	attrs []attribute.KeyValue,
+) {
 	if m == nil || m.breakerRequests == nil {
 		return
 	}
-	m.breakerRequests.Add(ctx, 1, metric.WithAttributes(
+	allAttrs := make([]attribute.KeyValue, 0, len(attrs)+2)
+	allAttrs = append(allAttrs, attrs...)
+	allAttrs = append(allAttrs,
 		attribute.String("breaker.name", name),
 		attribute.String("breaker.result", result),
-	))
+	)
+	m.breakerRequests.Add(ctx, 1, metric.WithAttributes(allAttrs...))
+}
+
+// recordBreakerDuration records the duration of circuit breaker execution.
+func (m *metrics) recordBreakerDuration(
+	ctx context.Context,
+	duration time.Duration,
+	attrs []attribute.KeyValue,
+) {
+	if m == nil || m.circuitBreakerDuration == nil {
+		return
+	}
+	m.circuitBreakerDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
