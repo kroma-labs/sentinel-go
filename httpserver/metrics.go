@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 // Metrics provides server metrics using OpenTelemetry.
@@ -58,6 +59,11 @@ func NewMetrics(cfg MetricsConfig) (*Metrics, error) {
 		metric.WithInstrumentationVersion("1.0.0"),
 	)
 
+	// Use default buckets if none provided
+	if len(cfg.DurationBuckets) == 0 {
+		cfg.DurationBuckets = DefaultMetricsConfig().DurationBuckets
+	}
+
 	requestDuration, err := meter.Float64Histogram(
 		"http.server.request.duration",
 		metric.WithDescription("Duration of HTTP requests in seconds"),
@@ -69,7 +75,7 @@ func NewMetrics(cfg MetricsConfig) (*Metrics, error) {
 	}
 
 	requestSize, err := meter.Int64Histogram(
-		"http.server.request.size",
+		"http.server.request.body.size",
 		metric.WithDescription("Size of HTTP request bodies in bytes"),
 		metric.WithUnit("By"),
 	)
@@ -78,7 +84,7 @@ func NewMetrics(cfg MetricsConfig) (*Metrics, error) {
 	}
 
 	responseSize, err := meter.Int64Histogram(
-		"http.server.response.size",
+		"http.server.response.body.size",
 		metric.WithDescription("Size of HTTP response bodies in bytes"),
 		metric.WithUnit("By"),
 	)
@@ -95,7 +101,7 @@ func NewMetrics(cfg MetricsConfig) (*Metrics, error) {
 	}
 
 	requestTotal, err := meter.Int64Counter(
-		"http.server.request.total",
+		"http.server.request",
 		metric.WithDescription("Total number of HTTP requests"),
 	)
 	if err != nil {
@@ -125,8 +131,8 @@ func NewMetrics(cfg MetricsConfig) (*Metrics, error) {
 //
 // Metrics recorded:
 //   - http.server.request.duration: Request latency histogram
-//   - http.server.request.size: Request body size histogram
-//   - http.server.response.size: Response body size histogram
+//   - http.server.request.body.size: Request body size histogram
+//   - http.server.response.body.size: Response body size histogram
 //   - http.server.active_requests: In-flight request gauge
 //   - http.server.request.total: Total request counter
 //   - http.server.response.status: Status code distribution
@@ -140,11 +146,23 @@ func (m *Metrics) Middleware() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
+			attrServiceName := semconv.ServiceNameKey.String(m.serviceName)
+			attrMethod := semconv.HTTPRequestMethodKey.String(r.Method)
+
+			// Prefer the registered route pattern (Go 1.22+ ServeMux) for
+			// low-cardinality metric labels. Falls back to the raw path for
+			// older muxes or custom routers.
+			route := r.URL.Path
+			if pattern := r.Pattern; pattern != "" {
+				route = pattern
+			}
+			attrRoute := semconv.HTTPRouteKey.String(route)
+
 			// Track active requests
 			attrs := []attribute.KeyValue{
-				attribute.String("service.name", m.serviceName),
-				attribute.String("http.request.method", r.Method),
-				attribute.String("url.path", r.URL.Path),
+				attrServiceName,
+				attrMethod,
+				attrRoute,
 			}
 
 			m.activeRequests.Add(r.Context(), 1, metric.WithAttributes(attrs...))
@@ -168,7 +186,7 @@ func (m *Metrics) Middleware() Middleware {
 
 			allAttrs := make([]attribute.KeyValue, len(attrs)+1)
 			copy(allAttrs, attrs)
-			allAttrs[len(attrs)] = attribute.Int("http.response.status_code", status)
+			allAttrs[len(attrs)] = semconv.HTTPResponseStatusCodeKey.Int(status)
 
 			m.requestDuration.Record(r.Context(), duration, metric.WithAttributes(allAttrs...))
 			m.responseSize.Record(r.Context(), respSize, metric.WithAttributes(allAttrs...))

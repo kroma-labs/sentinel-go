@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -38,15 +39,23 @@ type RateLimitConfig struct {
 	// WindowDuration is the sliding window duration for Redis rate limiting.
 	// Default: 1 second
 	WindowDuration time.Duration
+
+	// CleanupInterval controls how often inactive per-key rate limiters are
+	// evicted from memory. Entries unused for this duration are removed.
+	// Only applies to in-memory per-key rate limiting (KeyFunc != nil, Redis == nil).
+	//
+	// Default: 5 minutes
+	CleanupInterval time.Duration
 }
 
 // DefaultRateLimitConfig returns a default rate limit configuration.
 func DefaultRateLimitConfig() RateLimitConfig {
 	return RateLimitConfig{
-		Limit:          100,
-		Burst:          200,
-		RedisKeyPrefix: "ratelimit:",
-		WindowDuration: time.Second,
+		Limit:           100,
+		Burst:           200,
+		RedisKeyPrefix:  "ratelimit:",
+		WindowDuration:  time.Second,
+		CleanupInterval: 5 * time.Minute,
 	}
 }
 
@@ -58,12 +67,27 @@ func RateLimit(cfg RateLimitConfig) Middleware {
 	if cfg.WindowDuration == 0 {
 		cfg.WindowDuration = time.Second
 	}
+	if cfg.CleanupInterval == 0 {
+		cfg.CleanupInterval = 5 * time.Minute
+	}
 
 	if cfg.Redis != nil {
 		return redisRateLimiter(cfg)
 	}
 
 	return memoryRateLimiter(cfg)
+}
+
+// rateLimiterEntry wraps a rate.Limiter with a last-access timestamp
+// for TTL-based eviction of inactive entries.
+type rateLimiterEntry struct {
+	limiter    *rate.Limiter
+	lastAccess atomic.Int64 // unix nano timestamp
+}
+
+// touch updates the last-access timestamp to now.
+func (e *rateLimiterEntry) touch() {
+	e.lastAccess.Store(time.Now().UnixNano())
 }
 
 // memoryRateLimiter creates an in-memory token bucket rate limiter.
@@ -83,27 +107,51 @@ func memoryRateLimiter(cfg RateLimitConfig) Middleware {
 	}
 
 	var mu sync.RWMutex
-	limiters := make(map[string]*rate.Limiter)
+	limiters := make(map[string]*rateLimiterEntry)
+
+	// Background eviction of inactive per-key limiters to prevent unbounded
+	// memory growth. Entries unused for CleanupInterval are removed.
+	go func() {
+		ticker := time.NewTicker(cfg.CleanupInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			cutoff := time.Now().Add(-cfg.CleanupInterval).UnixNano()
+
+			mu.Lock()
+			for key, entry := range limiters {
+				if entry.lastAccess.Load() < cutoff {
+					delete(limiters, key)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := cfg.KeyFunc(r)
 
 			mu.RLock()
-			limiter, exists := limiters[key]
+			entry, exists := limiters[key]
 			mu.RUnlock()
 
 			if !exists {
 				mu.Lock()
-				limiter, exists = limiters[key]
+				entry, exists = limiters[key]
 				if !exists {
-					limiter = rate.NewLimiter(cfg.Limit, cfg.Burst)
-					limiters[key] = limiter
+					entry = &rateLimiterEntry{
+						limiter: rate.NewLimiter(cfg.Limit, cfg.Burst),
+					}
+					entry.touch()
+					limiters[key] = entry
 				}
 				mu.Unlock()
 			}
 
-			if !limiter.Allow() {
+			entry.touch()
+
+			if !entry.limiter.Allow() {
 				WriteError(w, http.StatusTooManyRequests, "rate limit exceeded",
 					Error{Field: "rate_limit", Message: "too many requests"})
 				return

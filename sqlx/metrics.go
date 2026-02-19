@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 // metrics holds the metric instruments for database operations.
@@ -59,7 +60,7 @@ func (m *metrics) recordQueryDuration(
 	allAttrs = append(allAttrs, attrs...)
 
 	if operation != "" {
-		allAttrs = append(allAttrs, attribute.String("db.operation", operation))
+		allAttrs = append(allAttrs, semconv.DBOperationKey.String(operation))
 	}
 
 	status := "ok"
@@ -80,8 +81,8 @@ func (m *metrics) registerPoolMetrics(
 	var err error
 
 	m.openConnections, err = meter.Int64ObservableGauge(
-		"db.client.connections.open",
-		metric.WithDescription("Number of open connections in the pool"),
+		"db.client.connection.count",
+		metric.WithDescription("Number of connections in the pool"),
 		metric.WithUnit("{connection}"),
 	)
 	if err != nil {
@@ -98,7 +99,7 @@ func (m *metrics) registerPoolMetrics(
 	}
 
 	m.maxConnections, err = meter.Int64ObservableGauge(
-		"db.client.connections.max",
+		"db.client.connection.max",
 		metric.WithDescription("Maximum number of connections allowed in the pool"),
 		metric.WithUnit("{connection}"),
 	)

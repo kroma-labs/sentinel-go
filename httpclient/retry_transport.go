@@ -21,12 +21,12 @@ var errRetryableStatus = errors.New("retryable status code")
 // when and how to retry failed requests.
 type retryTransport struct {
 	base       http.RoundTripper
-	cfg        *internalConfig
+	cfg        *clientConfig
 	classifier RetryClassifier
 }
 
 // newRetryTransport creates a new retry transport wrapper.
-func newRetryTransport(base http.RoundTripper, cfg *internalConfig) http.RoundTripper {
+func newRetryTransport(base http.RoundTripper, cfg *clientConfig) http.RoundTripper {
 	// If retries are disabled, return the base transport directly
 	if !cfg.RetryConfig.IsEnabled() {
 		return base
@@ -88,7 +88,8 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	retryOpts = append(retryOpts, backoff.WithNotify(func(err error, next time.Duration) {
 		attempt++
 		t.recordRetryEvent(span, attempt, err, next)
-		t.cfg.Metrics.recordRetryAttempt(ctx, t.cfg.baseAttributes(), attempt)
+		reqAttrs := requestAttributes(req)
+		t.cfg.Metrics.recordRetryAttempt(ctx, append(t.cfg.baseAttributes(), reqAttrs...), attempt)
 	}))
 
 	resp, lastErr = backoff.Retry(ctx, func() (*http.Response, error) {
@@ -130,10 +131,19 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		)
 
 		if lastErr != nil {
-			t.cfg.Metrics.recordRetryExhausted(ctx, t.cfg.baseAttributes())
+			reqAttrs := requestAttributes(req)
+			t.cfg.Metrics.recordRetryExhausted(
+				ctx,
+				append(t.cfg.baseAttributes(), reqAttrs...),
+			)
 		}
 	}
-	t.cfg.Metrics.recordRetryDuration(ctx, t.cfg.baseAttributes(), totalDuration)
+	reqAttrs := requestAttributes(req)
+	t.cfg.Metrics.recordRetryDuration(
+		ctx,
+		append(t.cfg.baseAttributes(), reqAttrs...),
+		totalDuration,
+	)
 
 	return resp, lastErr
 }

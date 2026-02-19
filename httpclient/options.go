@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -449,8 +450,8 @@ func ConservativeConfig() Config {
 // Internal Configuration
 // =============================================================================
 
-// internalConfig holds all configuration including HTTP transport and OTel settings.
-type internalConfig struct {
+// clientConfig holds all configuration including HTTP transport and OTel settings.
+type clientConfig struct {
 	// HTTP transport configuration
 	httpConfig Config
 
@@ -583,7 +584,7 @@ type internalConfig struct {
 	GenerateCurl bool
 
 	// EnableTrace enables timing trace info collection.
-	EnableTrace bool
+	// EnableNetworkTrace controls this via EnableNetworkTrace field.
 
 	// === Testing Configuration ===
 
@@ -593,8 +594,8 @@ type internalConfig struct {
 }
 
 // newConfig creates a new internal config with defaults and applies options.
-func newConfig(opts ...Option) *internalConfig {
-	cfg := &internalConfig{
+func newConfig(opts ...Option) *clientConfig {
+	cfg := &clientConfig{
 		httpConfig:     DefaultConfig(),
 		TracerProvider: otel.GetTracerProvider(),
 		MeterProvider:  otel.GetMeterProvider(),
@@ -609,8 +610,8 @@ func newConfig(opts ...Option) *internalConfig {
 	}
 
 	// Initialize tracer and meter after options are applied
-	cfg.Tracer = cfg.TracerProvider.Tracer(scope)
-	cfg.Meter = cfg.MeterProvider.Meter(scope)
+	cfg.Tracer = cfg.TracerProvider.Tracer(scope, trace.WithSchemaURL(semconv.SchemaURL))
+	cfg.Meter = cfg.MeterProvider.Meter(scope, metric.WithSchemaURL(semconv.SchemaURL))
 
 	// Initialize metrics (ignore errors, will just be nil if fails)
 	cfg.Metrics, _ = newMetrics(cfg.Meter)
@@ -632,7 +633,7 @@ func newConfig(opts ...Option) *internalConfig {
 }
 
 // buildTransport creates an http.Transport from the configuration.
-func (cfg *internalConfig) buildTransport() *http.Transport {
+func (cfg *clientConfig) buildTransport() *http.Transport {
 	hc := cfg.httpConfig
 
 	dialer := &net.Dialer{
@@ -670,7 +671,7 @@ func (cfg *internalConfig) buildTransport() *http.Transport {
 }
 
 // baseAttributes returns common attributes for all spans and metrics.
-func (cfg *internalConfig) baseAttributes() []attribute.KeyValue {
+func (cfg *clientConfig) baseAttributes() []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 1)
 	if cfg.ServiceName != "" {
 		attrs = append(attrs, attribute.String("http.client.name", cfg.ServiceName))
@@ -706,7 +707,7 @@ type Filter func(r *http.Request) bool
 type SpanNameFormatter func(method string, r *http.Request) string
 
 // Option configures the HTTP client.
-type Option func(*internalConfig)
+type Option func(*clientConfig)
 
 // WithConfig sets the HTTP transport configuration.
 // Use DefaultConfig(), HighThroughputConfig(), LowLatencyConfig(), or
@@ -728,7 +729,7 @@ type Option func(*internalConfig)
 //	    sentinelhttpclient.WithConfig(cfg),
 //	)
 func WithConfig(c Config) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.httpConfig = c
 	}
 }
@@ -754,7 +755,7 @@ func WithConfig(c Config) Option {
 //	//   Span: HTTP GET
 //	//   └── http.client.name: order-service
 func WithServiceName(name string) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.ServiceName = name
 	}
 }
@@ -780,7 +781,7 @@ func WithServiceName(name string) Option {
 //	    sentinelhttpclient.WithServiceName("my-service"),
 //	)
 func WithTracerProvider(tp trace.TracerProvider) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.TracerProvider = tp
 	}
 }
@@ -805,7 +806,7 @@ func WithTracerProvider(tp trace.TracerProvider) Option {
 //	    sentinelhttpclient.WithServiceName("my-service"),
 //	)
 func WithMeterProvider(mp metric.MeterProvider) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.MeterProvider = mp
 	}
 }
@@ -831,7 +832,7 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 //	    }),
 //	)
 func WithTLSConfig(tlsCfg *tls.Config) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.TLSConfig = tlsCfg
 	}
 }
@@ -846,7 +847,7 @@ func WithTLSConfig(tlsCfg *tls.Config) Option {
 //	    sentinelhttpclient.WithProxyURL(proxyURL),
 //	)
 func WithProxyURL(proxyURL *url.URL) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.ProxyURL = proxyURL
 		cfg.ProxyFromEnvironment = false
 	}
@@ -863,7 +864,7 @@ func WithProxyURL(proxyURL *url.URL) Option {
 //	    sentinelhttpclient.WithProxyFromEnvironment(false),
 //	)
 func WithProxyFromEnvironment(enabled bool) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.ProxyFromEnvironment = enabled
 	}
 }
@@ -883,7 +884,7 @@ func WithProxyFromEnvironment(enabled bool) Option {
 //	    sentinelhttpclient.WithDisableNetworkTrace(),
 //	)
 func WithDisableNetworkTrace() Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.EnableNetworkTrace = false
 	}
 }
@@ -919,7 +920,7 @@ func WithDisableNetworkTrace() Option {
 //	    }),
 //	)
 func WithFilter(f Filter) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.Filters = append(cfg.Filters, f)
 	}
 }
@@ -939,7 +940,7 @@ func WithFilter(f Filter) Option {
 //	    }),
 //	)
 func WithSpanNameFormatter(f SpanNameFormatter) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.SpanNameFormatter = f
 	}
 }
@@ -955,7 +956,7 @@ func WithSpanNameFormatter(f SpanNameFormatter) Option {
 //	    ),
 //	)
 func WithSpanOptions(opts ...trace.SpanStartOption) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.SpanStartOptions = append(cfg.SpanStartOptions, opts...)
 	}
 }
@@ -976,7 +977,7 @@ func WithSpanOptions(opts ...trace.SpanStartOption) Option {
 //	    }),
 //	)
 func WithMetricAttributesFn(f func(*http.Request) []attribute.KeyValue) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.MetricAttributesFn = f
 	}
 }
@@ -994,7 +995,7 @@ func WithMetricAttributesFn(f func(*http.Request) []attribute.KeyValue) Option {
 //	    sentinelhttpclient.WithPropagators(b3.New()),
 //	)
 func WithPropagators(p propagation.TextMapPropagator) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.Propagators = p
 	}
 }
@@ -1020,7 +1021,7 @@ func WithPropagators(p propagation.TextMapPropagator) Option {
 //	    }),
 //	)
 func WithClientTrace(f func(context.Context) *httptrace.ClientTrace) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.ClientTrace = f
 	}
 }
@@ -1049,7 +1050,7 @@ func WithClientTrace(f func(context.Context) *httptrace.ClientTrace) Option {
 //	    sentinelhttpclient.WithRetryConfig(cfg),
 //	)
 func WithRetryConfig(c RetryConfig) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.RetryConfig = c
 	}
 }
@@ -1066,7 +1067,7 @@ func WithRetryConfig(c RetryConfig) Option {
 //	    sentinelhttpclient.WithRetryDisabled(),
 //	)
 func WithRetryDisabled() Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.RetryConfig = NoRetryConfig()
 	}
 }
@@ -1088,7 +1089,7 @@ func WithRetryDisabled() Option {
 //	    }),
 //	)
 func WithRetryClassifier(c RetryClassifier) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.RetryClassifier = c
 	}
 }
@@ -1117,7 +1118,7 @@ func WithRetryClassifier(c RetryClassifier) Option {
 //	    sentinelhttpclient.WithRetryBackOff(backoff),
 //	)
 func WithRetryBackOff(b backoff.BackOff) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.RetryBackOff = b
 	}
 }
@@ -1147,7 +1148,7 @@ func WithRetryBackOff(b backoff.BackOff) Option {
 //	    sentinelhttpclient.WithTieredRetry(tiers, 15*time.Minute),
 //	)
 func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		if len(tiers) == 0 {
 			// Use default tiers
 			cfg.RetryBackOff = DefaultTieredRetryBackOff()
@@ -1170,7 +1171,7 @@ func WithTieredRetry(tiers []RetryTier, maxDelay time.Duration) Option {
 //	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
 //	)
 func WithBreakerConfig(c BreakerConfig) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.BreakerConfig = &c
 	}
 }
@@ -1202,7 +1203,7 @@ func WithBreakerConfig(c BreakerConfig) Option {
 //	    httpclient.WithBreakerConfig(httpclient.DefaultBreakerConfig()),
 //	)
 func WithChaos(c ChaosConfig) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.ChaosConfig = &c
 	}
 }
@@ -1223,7 +1224,7 @@ func WithChaos(c ChaosConfig) Option {
 //	)
 //	// Requests to "/users" will go to "https://api.example.com/users"
 func WithBaseURL(url string) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.BaseURL = url
 	}
 }
@@ -1242,7 +1243,7 @@ func WithBaseURL(url string) Option {
 //	    }),
 //	)
 func WithDefaultHeaders(headers http.Header) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.DefaultHeaders = headers
 	}
 }
@@ -1256,7 +1257,7 @@ func WithDefaultHeaders(headers http.Header) Option {
 //	    httpclient.WithDefaultHeader("X-API-Key", apiKey),
 //	)
 func WithDefaultHeader(key, value string) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		if cfg.DefaultHeaders == nil {
 			cfg.DefaultHeaders = make(http.Header)
 		}
@@ -1276,7 +1277,7 @@ func WithDefaultHeader(key, value string) Option {
 //	    httpclient.WithDebug(true),
 //	)
 func WithDebug(enabled bool) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.Debug = enabled
 	}
 }
@@ -1297,8 +1298,24 @@ func WithDebug(enabled bool) Option {
 //	resp, err := client.Request("Test").Get(ctx, "/users")
 //	fmt.Println(resp.CurlCommand())
 func WithGenerateCurl(enabled bool) Option {
-	return func(cfg *internalConfig) {
+	return func(cfg *clientConfig) {
 		cfg.GenerateCurl = enabled
+	}
+}
+
+// WithEnableTrace enables timing trace info collection.
+//
+// When enabled, detailed timing information (DNS, TCP, TLS, TTFB)
+// is collected for every request and available in the Response.TraceInfo().
+//
+// Example:
+//
+//	client := httpclient.New(
+//	    httpclient.WithEnableTrace(true),
+//	)
+func WithEnableTrace(enabled bool) Option {
+	return func(cfg *clientConfig) {
+		cfg.EnableNetworkTrace = enabled
 	}
 }
 
@@ -1338,7 +1355,7 @@ func WithGenerateCurl(enabled bool) Option {
 //	    }),
 //	)
 func WithRateLimit(cfg RateLimitConfig) Option {
-	return func(c *internalConfig) {
+	return func(c *clientConfig) {
 		c.RateLimitConfig = &cfg
 	}
 }
@@ -1374,7 +1391,7 @@ func WithRateLimit(cfg RateLimitConfig) Option {
 //	    }),
 //	)
 func WithRequestInterceptor(i RequestInterceptor) Option {
-	return func(c *internalConfig) {
+	return func(c *clientConfig) {
 		if c.Interceptors == nil {
 			c.Interceptors = NewInterceptorChain()
 		}
@@ -1399,7 +1416,7 @@ func WithRequestInterceptor(i RequestInterceptor) Option {
 //	    }),
 //	)
 func WithResponseInterceptor(i ResponseInterceptor) Option {
-	return func(c *internalConfig) {
+	return func(c *clientConfig) {
 		if c.Interceptors == nil {
 			c.Interceptors = NewInterceptorChain()
 		}

@@ -771,24 +771,83 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		}
 	}
 
-	// Build URL
-	targetURL, err := rb.buildURL()
+	// Inject route template into context for metrics
+	if rb.path != "" {
+		ctx = WithRoute(ctx, rb.path)
+	}
+
+	req, bodyBytes, err := rb.buildHTTPRequest(ctx, method)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check for body encoding errors
-	if er, ok := rb.body.(*bodyEncodingError); ok {
-		return nil, er.err
+	if err := rb.applyInterceptors(req); err != nil {
+		return nil, err
 	}
 
-	// Handle multipart file uploads
+	// Set up request tracing if enabled
+	traceEnabled := rb.enableTrace || (rb.client != nil && rb.client.enableNetworkTrace)
+	var tracer *requestTracer
+	if traceEnabled {
+		tracer = &requestTracer{totalStart: time.Now()}
+		ctx = httptrace.WithClientTrace(ctx, tracer.clientTrace())
+		req = req.WithContext(ctx)
+	}
+
+	if rb.client.debug {
+		logRequest(debugLogger, req)
+	}
+
+	startTime := time.Now()
+
+	endpoint := rb.operationName
+	if endpoint == "" {
+		endpoint = req.URL.Path
+	}
+
+	//nolint:bodyclose // Response body is closed by caller via Response wrapper
+	httpResp, err := rb.doRequestWithStrategy(ctx, method, req, bodyBytes)
+
+	duration := time.Since(startTime)
+
+	// Record latency for adaptive hedging (only on success)
+	if httpResp != nil && rb.adaptiveHedgeConfig != nil {
+		rb.adaptiveHedgeConfig.GetTracker().Record(endpoint, duration)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if rb.client.debug {
+		logResponse(debugLogger, httpResp, duration)
+	}
+
+	return rb.finalizeResponse(httpResp, req, tracer)
+}
+
+// buildHTTPRequest constructs the *http.Request from the builder's state,
+// including URL resolution, body encoding, multipart handling, and headers.
+// Returns the request, body bytes (for replay in hedging/coalescing), and any error.
+func (rb *RequestBuilder) buildHTTPRequest(
+	ctx context.Context,
+	method string,
+) (*http.Request, []byte, error) {
+	targetURL, err := rb.buildURL()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if er, ok := rb.body.(*bodyEncodingError); ok {
+		return nil, nil, er.err
+	}
+
 	reqBody := rb.body
 	var bodyBytes []byte
 	if len(rb.fileUploads) > 0 {
 		body, contentType, err := rb.buildMultipart()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reqBody = body
 		rb.contentType = contentType
@@ -798,18 +857,18 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 	needsBodyReplay := (rb.hedgeConfig != nil && rb.hedgeConfig.Enabled()) ||
 		(rb.adaptiveHedgeConfig != nil && rb.adaptiveHedgeConfig.Enabled()) ||
 		rb.coalesce
+
 	if reqBody != nil && needsBodyReplay {
 		bodyBytes, err = io.ReadAll(reqBody)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reqBody = bytes.NewReader(bodyBytes)
 	}
 
-	// Create request
 	req, err := http.NewRequestWithContext(ctx, method, targetURL, reqBody)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Apply default headers from client
@@ -824,117 +883,88 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		req.Header[k] = v
 	}
 
-	// Set content type if body was set
 	if rb.contentType != "" && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", rb.contentType)
 	}
 
-	// Apply client-level request interceptors
+	return req, bodyBytes, nil
+}
+
+// applyInterceptors runs client-level and per-request interceptors on the request.
+func (rb *RequestBuilder) applyInterceptors(req *http.Request) error {
 	if rb.client.config.Interceptors != nil {
 		if err := rb.client.config.Interceptors.ApplyRequestInterceptors(req); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	// Apply per-request interceptors
 	for _, interceptor := range rb.requestInterceptors {
 		if err := interceptor(req); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	// Set up request tracing if enabled
-	var tracer *requestTracer
-	if rb.enableTrace || rb.client.enableTrace {
-		tracer = &requestTracer{totalStart: time.Now()}
-		ctx = httptrace.WithClientTrace(ctx, tracer.clientTrace())
-		req = req.WithContext(ctx)
-	}
+	return nil
+}
 
-	// Debug logging
-	if rb.client.debug {
-		logRequest(debugLogger, req)
-	}
-
-	startTime := time.Now()
-
-	// Determine endpoint key for latency tracking
-	endpoint := rb.operationName
-	if endpoint == "" {
-		endpoint = req.URL.Path
-	}
-
-	// Execute request (with or without hedging/coalescing)
-	var httpResp *http.Response
-
-	// Define the actual request execution function
+// doRequestWithStrategy executes the request using the appropriate strategy
+// (direct, hedged, adaptive-hedged, or coalesced).
+func (rb *RequestBuilder) doRequestWithStrategy(
+	ctx context.Context,
+	method string,
+	req *http.Request,
+	bodyBytes []byte,
+) (*http.Response, error) {
 	doRequest := func() (*http.Response, error) {
 		switch {
 		case rb.adaptiveHedgeConfig != nil && rb.adaptiveHedgeConfig.Enabled():
-			// Adaptive hedging: calculate delay from historical data
+			endpoint := rb.operationName
+			if endpoint == "" {
+				endpoint = req.URL.Path
+			}
 			delay := rb.adaptiveHedgeConfig.GetDelay(endpoint)
 			hedgeCfg := &HedgeConfig{
 				Delay:     delay,
 				MaxHedges: rb.adaptiveHedgeConfig.MaxHedges,
 			}
-
 			return rb.executeWithHedgingConfig(ctx, req, bodyBytes, hedgeCfg)
 		case rb.hedgeConfig != nil && rb.hedgeConfig.Enabled():
-
 			return rb.executeWithHedging(ctx, req, bodyBytes)
 		default:
-
 			return rb.client.httpClient.Do(req)
 		}
 	}
 
-	// Execute with or without coalescing
-	if rb.coalesce {
-		// Generate coalesce key
-		coalesceKey := GenerateCoalesceKey(method, targetURL, bodyBytes)
-
-		// Get client-specific singleflight group (use operationName as identifier)
-		clientID := rb.operationName
-		if clientID == "" {
-			clientID = "default"
-		}
-		group := clientCoalesceGroups.getOrCreateGroup(clientID)
-
-		// Execute via singleflight
-		//nolint:bodyclose // Response body is closed by caller via Response wrapper
-		result, err, _ := group.Do(coalesceKey, func() (any, error) {
-			resp, err := doRequest()
-			if err != nil {
-				return nil, err
-			}
-			return resp, nil
-		})
-
-		if err != nil {
-			return nil, err
-		}
-		httpResp = result.(*http.Response)
-	} else {
-		//nolint:bodyclose // Response body is closed by caller via Response wrapper
-		httpResp, err = doRequest()
+	if !rb.coalesce {
+		return doRequest()
 	}
 
-	duration := time.Since(startTime)
+	coalesceKey := GenerateCoalesceKey(method, req.URL.String(), bodyBytes)
 
-	// Record latency for adaptive hedging (only on success)
-	if httpResp != nil && rb.adaptiveHedgeConfig != nil {
-		rb.adaptiveHedgeConfig.GetTracker().Record(endpoint, duration)
+	clientID := rb.operationName
+	if clientID == "" {
+		clientID = "default"
 	}
+	group := clientCoalesceGroups.getOrCreateGroup(clientID)
+
+	//nolint:bodyclose // Response body is closed by caller via Response wrapper
+	result, err, _ := group.Do(coalesceKey, func() (any, error) {
+		return doRequest()
+	})
 
 	if err != nil {
 		return nil, err
 	}
+	return result.(*http.Response), nil
+}
 
-	// Debug logging for response
-	if rb.client.debug {
-		logResponse(debugLogger, httpResp, duration)
-	}
-
+// finalizeResponse wraps the raw HTTP response into a *Response, applying
+// response interceptors, cURL generation, trace info capture, and body decoding.
+func (rb *RequestBuilder) finalizeResponse(
+	httpResp *http.Response,
+	req *http.Request,
+	tracer *requestTracer,
+) (*Response, error) {
 	// Apply client-level response interceptors
 	if rb.client.config.Interceptors != nil {
 		if err := rb.client.config.Interceptors.ApplyResponseInterceptors(httpResp, req); err != nil {
@@ -942,7 +972,6 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		}
 	}
 
-	// Wrap response
 	resp := &Response{
 		Response:    httpResp,
 		request:     req,
@@ -950,23 +979,20 @@ func (rb *RequestBuilder) execute(ctx context.Context, method string) (*Response
 		errorResult: rb.errorResult,
 	}
 
-	// Generate cURL command if enabled
 	if rb.client.generateCurl {
 		var curlBody []byte
-		if reqBody != nil {
-			if buf, ok := reqBody.(*bytes.Buffer); ok {
+		if rb.body != nil {
+			if buf, ok := rb.body.(*bytes.Buffer); ok {
 				curlBody = buf.Bytes()
 			}
 		}
 		resp.curlCommand = generateCurlCommand(req, curlBody)
 	}
 
-	// Capture trace info if enabled
 	if tracer != nil {
 		resp.traceInfo = tracer.toTraceInfo()
 	}
 
-	// Read and decode body if targets are set
 	if rb.result != nil || rb.errorResult != nil {
 		if err := resp.decode(); err != nil {
 			return resp, err

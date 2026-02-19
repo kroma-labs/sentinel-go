@@ -163,7 +163,7 @@ func TestBreakerTransport_RoundTrip(t *testing.T) {
 			m, _ := newMetrics(meter)
 
 			breakerCfg := DefaultBreakerConfig()
-			cfg := &internalConfig{
+			cfg := &clientConfig{
 				BreakerConfig: &breakerCfg,
 				Metrics:       m,
 				ServiceName:   "test-service",

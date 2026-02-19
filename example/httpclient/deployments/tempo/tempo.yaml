@@ -1,0 +1,18 @@
+server:
+  http_listen_port: 3200
+  grpc_listen_address: 0.0.0.0 # Listen on all interfaces
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317 # Bind to all interfaces, not just localhost
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /tmp/tempo/blocks

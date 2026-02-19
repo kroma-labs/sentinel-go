@@ -23,7 +23,7 @@ type Client struct {
 	httpClient *http.Client
 
 	// config holds all client configuration.
-	config *internalConfig
+	config *clientConfig
 
 	// baseURL is the base URL for all requests.
 	baseURL string
@@ -37,8 +37,8 @@ type Client struct {
 	// generateCurl enables cURL command generation.
 	generateCurl bool
 
-	// enableTrace enables timing trace info collection.
-	enableTrace bool
+	// enableNetworkTrace enables timing trace info collection.
+	enableNetworkTrace bool
 }
 
 // HTTP returns the underlying *http.Client for advanced use cases.
@@ -137,13 +137,13 @@ func New(opts ...Option) *Client {
 	}
 
 	return &Client{
-		httpClient:     httpClient,
-		config:         cfg,
-		baseURL:        cfg.BaseURL,
-		defaultHeaders: cfg.DefaultHeaders,
-		debug:          cfg.Debug,
-		generateCurl:   cfg.GenerateCurl,
-		enableTrace:    cfg.EnableTrace,
+		httpClient:         httpClient,
+		config:             cfg,
+		baseURL:            cfg.BaseURL,
+		defaultHeaders:     cfg.DefaultHeaders,
+		debug:              cfg.Debug,
+		generateCurl:       cfg.GenerateCurl,
+		enableNetworkTrace: cfg.EnableNetworkTrace,
 	}
 }
 
@@ -193,13 +193,13 @@ func NewWithTransport(base http.RoundTripper, opts ...Option) *Client {
 	}
 
 	return &Client{
-		httpClient:     httpClient,
-		config:         cfg,
-		baseURL:        cfg.BaseURL,
-		defaultHeaders: cfg.DefaultHeaders,
-		debug:          cfg.Debug,
-		generateCurl:   cfg.GenerateCurl,
-		enableTrace:    cfg.EnableTrace,
+		httpClient:         httpClient,
+		config:             cfg,
+		baseURL:            cfg.BaseURL,
+		defaultHeaders:     cfg.DefaultHeaders,
+		debug:              cfg.Debug,
+		generateCurl:       cfg.GenerateCurl,
+		enableNetworkTrace: cfg.EnableNetworkTrace,
 	}
 }
 
@@ -225,12 +225,12 @@ func WrapClient(httpClient *http.Client, opts ...Option) *Client {
 	httpClient.Transport = newOtelTransport(base, cfg)
 
 	return &Client{
-		httpClient:     httpClient,
-		config:         cfg,
-		baseURL:        cfg.BaseURL,
-		defaultHeaders: cfg.DefaultHeaders,
-		debug:          cfg.Debug,
-		generateCurl:   cfg.GenerateCurl,
-		enableTrace:    cfg.EnableTrace,
+		httpClient:         httpClient,
+		config:             cfg,
+		baseURL:            cfg.BaseURL,
+		defaultHeaders:     cfg.DefaultHeaders,
+		debug:              cfg.Debug,
+		generateCurl:       cfg.GenerateCurl,
+		enableNetworkTrace: cfg.EnableNetworkTrace,
 	}
 }

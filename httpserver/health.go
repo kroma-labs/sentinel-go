@@ -60,6 +60,10 @@ type checkState struct {
 
 // HealthHandler manages health check endpoints.
 //
+// HealthHandler is safe for concurrent use. Adding checks and serving
+// HTTP endpoints can happen from different goroutines; all state is
+// serialized via an internal RWMutex.
+//
 // Create a HealthHandler using NewHealthHandler():
 //
 //	health := httpserver.NewHealthHandler(

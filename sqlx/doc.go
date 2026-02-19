@@ -90,5 +90,5 @@
 //   - Attributes: db.system, db.name, db.statement, db.operation
 //
 // Metrics:
-//   - db.client.query.duration (histogram by operation)
+//   - db.client.operation.duration (histogram by operation)
 package sqlx

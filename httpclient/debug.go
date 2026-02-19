@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -72,6 +73,7 @@ func generateCurlCommand(req *http.Request, body []byte) string {
 //	    Get(ctx, "/users/1")
 //	fmt.Println(resp.TraceInfo())
 type requestTracer struct {
+	mu         sync.Mutex
 	dnsStart   time.Time
 	dnsEnd     time.Time
 	connStart  time.Time
@@ -87,34 +89,53 @@ type requestTracer struct {
 func (t *requestTracer) clientTrace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		DNSStart: func(_ httptrace.DNSStartInfo) {
+			t.mu.Lock()
 			t.dnsStart = time.Now()
+			t.mu.Unlock()
 		},
 		DNSDone: func(_ httptrace.DNSDoneInfo) {
+			t.mu.Lock()
 			t.dnsEnd = time.Now()
+			t.mu.Unlock()
 		},
 		ConnectStart: func(_, _ string) {
+			t.mu.Lock()
 			t.connStart = time.Now()
+			t.mu.Unlock()
 		},
 		ConnectDone: func(_, _ string, _ error) {
+			t.mu.Lock()
 			t.connEnd = time.Now()
+			t.mu.Unlock()
 		},
 		TLSHandshakeStart: func() {
+			t.mu.Lock()
 			t.tlsStart = time.Now()
+			t.mu.Unlock()
 		},
 		TLSHandshakeDone: func(_ tls.ConnectionState, _ error) {
+			t.mu.Lock()
 			t.tlsEnd = time.Now()
+			t.mu.Unlock()
 		},
 		WroteRequest: func(_ httptrace.WroteRequestInfo) {
+			t.mu.Lock()
 			t.reqStart = time.Now()
+			t.mu.Unlock()
 		},
 		GotFirstResponseByte: func() {
+			t.mu.Lock()
 			t.firstByte = time.Now()
+			t.mu.Unlock()
 		},
 	}
 }
 
 // toTraceInfo converts the captured timing data to a TraceInfo struct.
 func (t *requestTracer) toTraceInfo() *TraceInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	info := &TraceInfo{}
 
 	if !t.dnsStart.IsZero() && !t.dnsEnd.IsZero() {

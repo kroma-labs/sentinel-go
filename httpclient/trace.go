@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sony/gobreaker/v2"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -20,14 +22,15 @@ import (
 
 // Error type classifications for the error.type attribute.
 const (
-	ErrorTypeTimeout           = "timeout"
-	ErrorTypeConnectionRefused = "connection_refused"
-	ErrorTypeDNSError          = "dns_error"
-	ErrorTypeTLSError          = "tls_error"
-	ErrorTypeCancelled         = "cancelled"
-	ErrorTypeConnectionReset   = "connection_reset"
-	ErrorTypeEOF               = "eof"
-	ErrorTypeUnknown           = "unknown"
+	ErrorTypeTimeout            = "timeout"
+	ErrorTypeConnectionRefused  = "connection_refused"
+	ErrorTypeDNSError           = "dns_error"
+	ErrorTypeTLSError           = "tls_error"
+	ErrorTypeCancelled          = "cancelled"
+	ErrorTypeConnectionReset    = "connection_reset"
+	ErrorTypeEOF                = "eof"
+	ErrorTypeCircuitBreakerOpen = "circuit_breaker_open"
+	ErrorTypeUnknown            = "unknown"
 )
 
 // networkTrace holds timing data collected from httptrace.ClientTrace.
@@ -255,6 +258,11 @@ func classifyError(err error) string {
 	// Check for context cancellation
 	if errors.Is(err, context.Canceled) {
 		return ErrorTypeCancelled
+	}
+
+	// Check for circuit breaker open state
+	if errors.Is(err, gobreaker.ErrOpenState) {
+		return ErrorTypeCircuitBreakerOpen
 	}
 
 	// Check for deadline exceeded (timeout)

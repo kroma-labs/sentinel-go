@@ -682,7 +682,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_open",
+          "expr": "db_client_connection_count",
           "refId": "A"
         }
       ],
@@ -737,7 +737,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_idle",
+          "expr": "db_client_connection_count{db_client_connection_state=\"idle\"}",
           "refId": "A"
         }
       ],
@@ -853,7 +853,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_idle",
+          "expr": "db_client_connection_count{db_client_connection_state=\"idle\"}",
           "legendFormat": "Idle",
           "refId": "A"
         },
@@ -949,7 +949,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_open",
+          "expr": "db_client_connection_count",
           "legendFormat": "Open",
           "refId": "A"
         },
@@ -958,7 +958,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_idle",
+          "expr": "db_client_connection_count{db_client_connection_state=\"idle\"}",
           "legendFormat": "Idle",
           "refId": "B"
         },
@@ -976,7 +976,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "db_client_connections_max",
+          "expr": "db_client_connection_max",
           "legendFormat": "Max",
           "refId": "D"
         }
