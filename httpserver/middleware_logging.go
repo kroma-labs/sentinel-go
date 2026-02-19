@@ -112,7 +112,8 @@ func Logger(cfg LoggerConfig) Middleware {
 			}
 
 			// Format bytes using go-humanize
-			bytesWritten := uint64(wrapped.BytesWritten())
+			bw := max(0, wrapped.BytesWritten())
+			bytesWritten := uint64(bw) //nolint:gosec // BytesWritten is always non-negative
 			bytesStr := humanize.Bytes(bytesWritten)
 
 			event.

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -12,7 +13,8 @@ import (
 // cancelled and a 503 Service Unavailable response is returned.
 //
 // Note: The handler must respect context cancellation for this to work
-// effectively.
+// effectively. The handler runs in a separate goroutine; all writes to
+// the underlying ResponseWriter are serialized via a mutex.
 //
 // Example:
 //
@@ -20,32 +22,25 @@ import (
 func Timeout(timeout time.Duration) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Create context with timeout
 			ctx, cancel := context.WithTimeout(r.Context(), timeout)
 			defer cancel()
 
-			// Create channel to signal completion
 			done := make(chan struct{})
 
-			// Wrap response writer to prevent writes after timeout
 			wrapped := &timeoutWriter{
 				ResponseWriter: w,
-				done:           done,
 			}
 
-			// Run handler in goroutine
 			go func() {
 				defer close(done)
 				next.ServeHTTP(wrapped, r.WithContext(ctx))
 			}()
 
-			// Wait for completion or timeout
 			select {
 			case <-done:
 				// Handler completed normally
 			case <-ctx.Done():
-				// Timeout occurred
-				wrapped.timedOut = true
+				wrapped.markTimedOut()
 				WriteError(w, http.StatusServiceUnavailable,
 					"request timeout",
 					Error{Field: "server", Message: "request processing timed out"},
@@ -56,14 +51,27 @@ func Timeout(timeout time.Duration) Middleware {
 }
 
 // timeoutWriter prevents writes after timeout.
+//
+// All field access is synchronized via mu because the handler goroutine
+// calls Write/WriteHeader while the main goroutine may set timedOut.
 type timeoutWriter struct {
 	http.ResponseWriter
-	done     chan struct{}
+	mu       sync.Mutex
 	timedOut bool
 	wrote    bool
 }
 
+// markTimedOut atomically sets the timedOut flag.
+func (tw *timeoutWriter) markTimedOut() {
+	tw.mu.Lock()
+	tw.timedOut = true
+	tw.mu.Unlock()
+}
+
 func (tw *timeoutWriter) WriteHeader(code int) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
 	if tw.timedOut || tw.wrote {
 		return
 	}
@@ -72,11 +80,15 @@ func (tw *timeoutWriter) WriteHeader(code int) {
 }
 
 func (tw *timeoutWriter) Write(b []byte) (int, error) {
+	tw.mu.Lock()
 	if tw.timedOut {
+		tw.mu.Unlock()
 		return 0, context.DeadlineExceeded
 	}
 	if !tw.wrote {
-		tw.WriteHeader(http.StatusOK)
+		tw.wrote = true
+		tw.ResponseWriter.WriteHeader(http.StatusOK)
 	}
+	tw.mu.Unlock()
 	return tw.ResponseWriter.Write(b)
 }

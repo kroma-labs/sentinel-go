@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -19,9 +20,11 @@ func PrometheusHandler() http.Handler {
 
 // PrometheusHandlerFor returns a Prometheus handler with custom options.
 //
+// It uses the default Prometheus gatherer to collect metrics.
+//
 // Example:
 //
 //	mux.Handle("/metrics", httpserver.PrometheusHandlerFor(opts))
 func PrometheusHandlerFor(opts promhttp.HandlerOpts) http.Handler {
-	return promhttp.HandlerFor(nil, opts)
+	return promhttp.HandlerFor(prometheus.DefaultGatherer, opts)
 }

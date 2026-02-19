@@ -148,7 +148,15 @@ func (m *Metrics) Middleware() Middleware {
 
 			attrServiceName := semconv.ServiceNameKey.String(m.serviceName)
 			attrMethod := semconv.HTTPRequestMethodKey.String(r.Method)
-			attrRoute := semconv.HTTPRouteKey.String(r.URL.Path)
+
+			// Prefer the registered route pattern (Go 1.22+ ServeMux) for
+			// low-cardinality metric labels. Falls back to the raw path for
+			// older muxes or custom routers.
+			route := r.URL.Path
+			if pattern := r.Pattern; pattern != "" {
+				route = pattern
+			}
+			attrRoute := semconv.HTTPRouteKey.String(route)
 
 			// Track active requests
 			attrs := []attribute.KeyValue{

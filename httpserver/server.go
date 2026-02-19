@@ -187,15 +187,12 @@ func (s *Server) serve(ctx context.Context, useTLS bool, certFile, keyFile strin
 		return errors.New("httpserver: handler is required (use WithHandler)")
 	}
 
-	// Create a channel to receive shutdown signals
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(shutdownChan)
 
-	// Channel to receive server errors
 	serverErrChan := make(chan error, 1)
 
-	// Start the server in a goroutine
 	go func() {
 		s.logger.Info().
 			Str("addr", s.httpServer.Addr).
@@ -217,7 +214,6 @@ func (s *Server) serve(ctx context.Context, useTLS bool, certFile, keyFile strin
 		close(serverErrChan)
 	}()
 
-	// Wait for shutdown signal, context cancellation, or server error
 	select {
 	case err := <-serverErrChan:
 		if err != nil {
@@ -234,30 +230,33 @@ func (s *Server) serve(ctx context.Context, useTLS bool, certFile, keyFile strin
 			Msg("context cancelled, shutting down")
 	}
 
-	// Graceful shutdown
-	return s.shutdown(ctx)
+	// Graceful shutdown — always use a fresh context so the drain window
+	// is independent of what triggered shutdown (signal vs context cancellation).
+	//nolint:contextcheck // Intentionally uses context.Background() - see shutdown() godoc.
+	return s.shutdown()
 }
 
 // shutdown performs graceful shutdown of the server.
-func (s *Server) shutdown(ctx context.Context) error {
+//
+// It always uses context.Background as the parent for the shutdown timeout.
+// This ensures the full ShutdownTimeout window is available regardless of
+// whether shutdown was triggered by a signal or context cancellation.
+func (s *Server) shutdown() error {
 	s.logger.Info().
 		Dur("timeout", s.config.ShutdownTimeout).
 		Msg("starting graceful shutdown")
 
-	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(
-		ctx,
+		context.Background(),
 		s.config.ShutdownTimeout,
 	)
 	defer cancel()
 
-	// Attempt graceful shutdown
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error().
 			Err(err).
 			Msg("graceful shutdown failed, forcing close")
 
-		// Force close if graceful shutdown fails
 		if closeErr := s.httpServer.Close(); closeErr != nil {
 			s.logger.Error().Err(closeErr).Msg("force close failed")
 		}

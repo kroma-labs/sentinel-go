@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -63,7 +64,7 @@ func (v *MemoryCredentialValidator) Validate(_ context.Context, clientID, passke
 	}
 
 	expectedPasskey, exists := v.clients[clientID]
-	if !exists || expectedPasskey != passkey {
+	if !exists || subtle.ConstantTimeCompare([]byte(expectedPasskey), []byte(passkey)) != 1 {
 		return ErrInvalidCredentials
 	}
 	return nil
@@ -103,7 +104,7 @@ func (v *SQLCredentialValidator) Validate(ctx context.Context, clientID, passkey
 		return ErrInvalidCredentials
 	}
 
-	if storedPasskey != passkey {
+	if subtle.ConstantTimeCompare([]byte(storedPasskey), []byte(passkey)) != 1 {
 		return ErrInvalidCredentials
 	}
 	return nil
