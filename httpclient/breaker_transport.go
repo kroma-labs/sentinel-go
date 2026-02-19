@@ -125,7 +125,12 @@ func newCircuitBreakerTransport(next http.RoundTripper, cfg *clientConfig) http.
 		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
 			if cfg.Metrics != nil {
-				cfg.Metrics.recordBreakerState(context.Background(), name, int64(to), cfg.baseAttributes())
+				cfg.Metrics.recordBreakerState(
+					context.Background(),
+					name,
+					int64(to),
+					cfg.baseAttributes(),
+				)
 			}
 			if cfg.BreakerConfig.OnStateChange != nil {
 				cfg.BreakerConfig.OnStateChange(name, from, to)
