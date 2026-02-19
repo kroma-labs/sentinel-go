@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	cryrand "crypto/rand"
 	"encoding/json"
 	"math/rand"
 	"net/http"
@@ -294,5 +295,97 @@ func RandomHandler() http.HandlerFunc {
 			Success: true,
 			Data:    data,
 		})
+	}
+}
+
+// PatchUserHandler handles PATCH /api/users/{id}
+func PatchUserHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Simulate some processing time
+		time.Sleep(time.Duration(rand.Intn(50)) * time.Millisecond)
+
+		idStr := r.PathValue("id")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Success: false,
+				Error:   "Invalid user ID",
+			})
+			return
+		}
+
+		// Use a map to handle partial updates
+		var updates map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Success: false,
+				Error:   "Invalid request body",
+			})
+			return
+		}
+
+		// Simulate updating specific fields...
+		user := User{
+			ID:        id,
+			Name:      "Patched User", // specific logic omitted for brevity
+			Email:     "patched@example.com",
+			CreatedAt: time.Now().Add(-24 * time.Hour),
+		}
+		if name, ok := updates["name"].(string); ok {
+			user.Name = name
+		}
+		if email, ok := updates["email"].(string); ok {
+			user.Email = email
+		}
+
+		writeJSON(w, http.StatusOK, APIResponse{
+			Success: true,
+			Message: "User patched successfully",
+			Data:    user,
+		})
+	}
+}
+
+// UploadHandler handles POST /api/upload
+// Accepts any content and returns success. Used to test large request bodies.
+func UploadHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Simulate processing a file upload
+		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
+
+		// Just read the body count (metrics middleware handles the actual size tracking)
+		// in a real app we'd save the file
+		size := r.ContentLength
+
+		writeJSON(w, http.StatusOK, APIResponse{
+			Success: true,
+			Message: "Upload received",
+			Data: map[string]any{
+				"size_bytes": size,
+			},
+		})
+	}
+}
+
+// DownloadHandler handles GET /api/download
+// Returns a random byte array of requested size. Used to test large response bodies.
+func DownloadHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sizeStr := r.URL.Query().Get("size")
+		size := 1024 // default 1KB
+		if sizeStr != "" {
+			if s, err := strconv.Atoi(sizeStr); err == nil && s > 0 {
+				size = s
+			}
+		}
+
+		// Generate random data
+		data := make([]byte, size)
+		cryrand.Read(data)
+
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/kroma-labs/sentinel-go/example/httpserver/internal/config"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
@@ -35,6 +36,8 @@ func Setup(
 		resource.WithAttributes(
 			semconv.ServiceName(config.ServiceName),
 			semconv.ServiceVersion(config.ServiceVersion),
+			semconv.ServiceInstanceID(config.Addr), // simplistic instance ID
+			attribute.String("config.version", config.ConfigVersion),
 		),
 	)
 	if err != nil {

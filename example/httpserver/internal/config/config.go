@@ -9,4 +9,5 @@ const (
 	OTLPEndpoint   = "localhost:4319"
 	ServiceName    = "sentinel-httpserver-example"
 	ServiceVersion = "0.1.0"
+	ConfigVersion  = "v1.0.0"
 )

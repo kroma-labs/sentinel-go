@@ -118,15 +118,9 @@ Grafana comes with a pre-configured dashboard:
 
 ### Grafana Dashboard
 
-**Latency:**
+![Overview](./.assets/overview.png)
 
 ![Latency](./.assets/latency.png)
-
-**Throughput:**
-
-![Throughput](./.assets/throughput.png)
-
----
 
 ## ✨ Features Demonstrated
 

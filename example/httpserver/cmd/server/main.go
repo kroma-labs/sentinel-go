@@ -55,12 +55,15 @@ func main() {
 	mux.HandleFunc("GET /api/users/{id}", handlers.GetUserHandler())
 	mux.HandleFunc("POST /api/users", handlers.CreateUserHandler())
 	mux.HandleFunc("PUT /api/users/{id}", handlers.UpdateUserHandler())
+	mux.HandleFunc("PATCH /api/users/{id}", handlers.PatchUserHandler())
 	mux.HandleFunc("DELETE /api/users/{id}", handlers.DeleteUserHandler())
 
 	// Test endpoints
 	mux.HandleFunc("GET /api/slow", handlers.SlowHandler())
 	mux.HandleFunc("GET /api/error", handlers.ErrorHandler())
 	mux.HandleFunc("GET /api/random", handlers.RandomHandler())
+	mux.HandleFunc("POST /api/upload", handlers.UploadHandler())
+	mux.HandleFunc("GET /api/download", handlers.DownloadHandler())
 
 	// 6. Create Health Handler
 	var health *httpserver.HealthHandler

@@ -41,5 +41,13 @@ load-test: ## Generate load using hey (install: go install github.com/rakyll/hey
 	@hey -n 1000 -c 10 http://localhost:8080/api/users
 	@hey -n 500 -c 5 http://localhost:8080/api/random
 	@hey -n 100 -c 2 http://localhost:8080/api/slow?delay=100ms
+	@echo "Test PATCH..."
+	@hey -n 200 -c 10 -m PATCH -d '{"name":"Patched"}' -T "application/json" http://localhost:8080/api/users/1
+	@echo "Test Upload (10KB)..."
+	@dd if=/dev/urandom bs=1024 count=10 > dummy.dat 2>/dev/null
+	@hey -n 100 -c 5 -m POST -D dummy.dat http://localhost:8080/api/upload
+	@rm dummy.dat
+	@echo "Test Download (50KB)..."
+	@hey -n 100 -c 5 http://localhost:8080/api/download?size=51200
 
 all: tidy run ## Clean, download deps, and build
