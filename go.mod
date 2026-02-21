@@ -9,7 +9,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/gin-gonic/gin v1.11.0
 	github.com/goccy/go-json v0.10.5
-	github.com/gofiber/fiber/v2 v2.52.10
+	github.com/gofiber/fiber/v2 v2.52.11
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.4
 	github.com/jmoiron/sqlx v1.4.0
