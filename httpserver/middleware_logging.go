@@ -20,6 +20,10 @@ type LoggerConfig struct {
 	// Useful for health check endpoints that are called frequently.
 	SkipPaths []string
 
+	// SkipMethods are HTTP methods that should not be logged.
+	// Useful to prevent OPTIONS request cluttering the logs.
+	SkipMethods []string
+
 	// LogRequestBody enables logging of request body (use with caution).
 	// This reads the entire request body into memory, which may impact
 	// performance for large payloads. Consider using only in development.
@@ -53,9 +57,14 @@ const defaultMaxBodyLogSize = 4 * 1024 // 4KB
 //	    SkipPaths: []string{"/livez", "/readyz", "/ping"},
 //	})(myHandler)
 func Logger(cfg LoggerConfig) Middleware {
-	skipPaths := make(map[string]bool)
+	skipPaths := make(map[string]bool, len(cfg.SkipPaths))
 	for _, path := range cfg.SkipPaths {
 		skipPaths[path] = true
+	}
+
+	skipMethods := make(map[string]bool, len(cfg.SkipMethods))
+	for _, method := range cfg.SkipMethods {
+		skipMethods[method] = true
 	}
 
 	maxBodySize := cfg.MaxBodyLogSize
@@ -65,8 +74,8 @@ func Logger(cfg LoggerConfig) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip logging for certain paths
-			if skipPaths[r.URL.Path] {
+			// Skip logging for certain paths or methods
+			if skipPaths[r.URL.Path] || skipMethods[r.Method] {
 				next.ServeHTTP(w, r)
 				return
 			}
